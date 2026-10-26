@@ -1,6 +1,8 @@
 ﻿using DocumentFormat.OpenXml.Office2010.Excel;
 using Mapster;
+using Microsoft.Extensions.Logging;
 using NX_lims_Softlines_Command_System.src.Application.Contract.DTOs;
+using NX_lims_Softlines_Command_System.src.Application.Contract.DTOs.TemplateConditionContext;
 using NX_lims_Softlines_Command_System.src.Application.Contract.DTOs.CheckListContext;
 using NX_lims_Softlines_Command_System.src.Application.Interface;
 using NX_lims_Softlines_Command_System.src.Domain.Aggregeates.CheckListContext;
@@ -31,13 +33,21 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.CheckListCont
         private readonly IParamGenerationUseCaseService _paramGenerationUseCaseService;
         private readonly CheckListAdapter _checkListAdapter;
 
+        /// <summary>checklist 侧 testParam 补齐服务（后端自算 testcondition 文本）。</summary>
+        private readonly ICheckListTestParamResolver _testParamResolver;
+
+        /// <summary>日志。用于记录带结构化字段的合成失败原因，便后后续审计模块接入。</summary>
+        private readonly ILogger<CheckListAppService> _logger;
+
         public CheckListAppService(
             IUnitOfWork unitOfWork, 
             ICheckListRepository checkListRepository,
             CheckListAdapter checkListAdapter,
             IFileStorageService fileStorage,
             IConditionPoolRepository conditionPoolRepository,
-            IParamGenerationUseCaseService paramGenerationUseCaseService)
+            IParamGenerationUseCaseService paramGenerationUseCaseService,
+            ICheckListTestParamResolver testParamResolver,
+            ILogger<CheckListAppService> logger)
         {
             _unitOfWork = unitOfWork;
             _fileStorage = fileStorage;
@@ -45,6 +55,8 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.CheckListCont
             _checkListRepository = checkListRepository;
             _conditionPoolRepository = conditionPoolRepository;
             _paramGenerationUseCaseService = paramGenerationUseCaseService;
+            _testParamResolver = testParamResolver;
+            _logger = logger;
         }
 
         /// <summary>
@@ -167,6 +179,22 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.CheckListCont
 
             try 
             {
+                // 后端自算 testParam：覆盖 dto 条目的 Parameter（testcondition 文本）与去重后的 CuttingMethod。
+                // 这是唯一的业务注入点 —— CheckListAdapter 保持纯 OpenXML 渲染，不注入任何业务依赖。
+                try
+                {
+                    await _testParamResolver.ApplyAsync(checklist, dto, ct);
+                }
+                catch (TestConditionCompositionException ex)
+                {
+                    // 用户诉求：后端报错必须让操作人员知道原因。
+                    // 结构化字段先入日志；后续审计模块可在此替换为写「报错原因表」。
+                    _logger.LogError(ex,
+                        "checklist testParam 合成失败，已阻断生成。Code={Code}, CheckListId={CheckListId}, TestPoint={TestPoint}, Detail={Detail}",
+                        ex.Code, ex.CheckListId, ex.TestPoint, ex.Detail);
+                    throw;
+                }
+
                 //调用ChecklistAdapter
                 await _checkListAdapter.FillCheckListAsync(targetDocxPath, dto, barcodeBitmap);
 

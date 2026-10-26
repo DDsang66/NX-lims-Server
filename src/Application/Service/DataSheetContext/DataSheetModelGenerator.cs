@@ -1,46 +1,73 @@
-﻿using Newtonsoft.Json;
+﻿using NX_lims_Softlines_Command_System.src.Application.Contract.DTOs.TemplateConditionContext;
 using NX_lims_Softlines_Command_System.src.Application.Interface;
-using NX_lims_Softlines_Command_System.src.Application.Interface.StandardContext;
 using NX_lims_Softlines_Command_System.src.Domain.Aggregeates.CheckListContext;
 using NX_lims_Softlines_Command_System.src.Domain.Aggregeates.CheckListContext.ValueObj;
 using NX_lims_Softlines_Command_System.src.Domain.Aggregeates.ParamEngineContext.ConditionPoolContext;
 using NX_lims_Softlines_Command_System.src.Domain.Aggregeates.ParamEngineContext.ParamRuleContext.ValueObj;
-using NX_lims_Softlines_Command_System.src.Domain.Aggregeates.Standard.ValueObj;
 using NX_lims_Softlines_Command_System.src.Domain.Aggregeates.TemplateContext;
-using NX_lims_Softlines_Command_System.src.Domain.Contract.Repository;
-using NX_lims_Softlines_Command_System.src.Domain.Contract.Service;
+using NX_lims_Softlines_Command_System.src.Domain.Contract.Service.DataSheetContext;
 using NX_lims_Softlines_Command_System.src.Domain.Contract.Util;
 using NX_lims_Softlines_Command_System.src.Domain.Share;
 using NX_lims_Softlines_Command_System.src.Domain.Share.DependencyInject;
-using NX_lims_Softlines_Command_System.src.Infrastructure.Service;
-using NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine;
 using System.Text.Json;
 
 namespace NX_lims_Softlines_Command_System.src.Application.Service.DataSheetContext
 {
     /// <summary>
-    /// 用于生成模板引擎所需要的数据结构
+    /// 数据单模型生成的<b>应用层编排薄壳</b>。
+    ///
+    /// 职责边界：
+    /// <list type="bullet">
+    /// <item>留在本类：取条件池、选池、组装 <see cref="DataSheetModel"/>（含 ReportNumber / SheetCount 的取值降级）、
+    /// 把领域层与公共组件的结果适配为实体契约。</item>
+    /// <item>模板索引匹配与 testcondition 文本填充：见 <see cref="ITestConditionComposer"/>
+    /// （<c>src\Application\Service\TemplateConditionContext</c>），与 checklist 侧共用同一份实现。</item>
+    /// <item>纯计算规则（分包 / 数据区计数 / 水洗展开 / 书签映射）：见 <see cref="IDataSheetModelDomainService"/>
+    /// （<c>src\Domain\Services\DataSheetContext</c>）。</item>
+    /// </list>
+    ///
+    /// 本类不得再自行实现上述任何规则 —— 否则多套同构实现会在日后分叉。
     /// </summary>
     public class DataSheetModelGenerator : IScopedDependency, IDataSheetModelGenerator
     {
-        private readonly IStandardRepository _standardRepository;
-        private readonly ITemplateSelectService _templateSelectService;
+        /// <summary>testcondition 文本合成器（模板选择 + 文本填充），与 checklist 侧共用。</summary>
+        private readonly ITestConditionComposer _composer;
 
-        public DataSheetModelGenerator(IStandardRepository standardRepository, ITemplateSelectService templateSelectService)
+        /// <summary>数据单模型领域规则（分包 / 计数 / 展开 / 书签映射）。</summary>
+        private readonly IDataSheetModelDomainService _domainService;
+
+        /// <summary>
+        /// 构造薄壳。
+        /// </summary>
+        /// <param name="composer">testcondition 合成器，承载运行条件组装、模板选择与文本填充。</param>
+        /// <param name="domainService">领域规则服务，承载全部纯计算逻辑。</param>
+        /// <exception cref="ArgumentNullException">任一依赖为 null 时抛出。</exception>
+        public DataSheetModelGenerator(
+            ITestConditionComposer composer,
+            IDataSheetModelDomainService domainService)
         {
-            _standardRepository = standardRepository;
-            _templateSelectService = templateSelectService;
+            _composer = composer ?? throw new ArgumentNullException(nameof(composer));
+            _domainService = domainService ?? throw new ArgumentNullException(nameof(domainService));
         }
 
         /// <summary>
-        /// 按照testPointParams的ParamSet进行分组，生成DataSheetModel列表
+        /// 按照 testPointParams 的 ParamSet 进行分组，生成 DataSheetModel 列表。
+        ///
+        /// 编排顺序：分包 → 逐包选池 → 调公共组件合成条件与模板 → 组装模型。
         /// </summary>
-        /// <param name="pool"></param>
-        /// <param name="item"></param>
-        /// <returns></returns>
-        public async Task<List<DataSheetModel>> GenerateAsync(List<ConditionPool> pools, CheckListItem item,CancellationToken ct) 
+        /// <param name="pools">该 CheckList 下的全部条件池（由 Worker 批量预取，避免 N+1）。</param>
+        /// <param name="item">本次要生成的检测项。</param>
+        /// <param name="ct">取消令牌。</param>
+        /// <returns>模型列表；无分包或参数包匹配不到条件池时返回空列表。</returns>
+        /// <exception cref="TestConditionCompositionException">
+        /// 模板索引未命中（TC004）或模板缺少文本模板（TC005）时由公共组件抛出，本类不吞异常。
+        /// </exception>
+        public async Task<List<DataSheetModel>> GenerateAsync(
+            List<ConditionPool> pools,
+            CheckListItem item,
+            CancellationToken ct)
         {
-            var packages = PackByParamSet(item);
+            var packages = _domainService.PackByParamSet(item);
 
             var models = new List<DataSheetModel>(packages.Count);
 
@@ -54,52 +81,27 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.DataSheetCont
 
                 if (pool == null) continue; // 防御性编程，避免后续空引用
 
-                //-----------------------------------------------------------------
-                //用运行时克隆字典避免并发安全
-                var runtimeConditions = new Dictionary<string, object?>(pool.Conditions);
+                // 运行条件组装 / 查标准拼 TestMethod / 模板索引匹配 / 文本模板填充，
+                // 全部交给公共组件，与 checklist 侧共用同一份实现。
+                var composition = await _composer.ComposeForPackageAsync(item, pool, package, ct);
 
-                var options = new JsonSerializerOptions { Converters = { new TypeConverter() } };
-               
-                var paramJson = package.ParamSet?.Values != null
-                    ? System.Text.Json.JsonSerializer.Serialize(package.ParamSet.Values, options)
-                    : "{}";
+                var template = composition.Template;
 
-                var standardIds = item.StandardIds
-                    .Where(id => id != null)
-                    .Select(id => new StandardId(id.Value))
-                    .ToList();
+                // TestMethod 由公共组件写进运行时条件字典（已按 Id 排序，避免索引匹配漂移），
+                // 这里直接复用，不再自行查标准库，避免第二份拼接逻辑。
+                var testMethod = composition.RuntimeConditions.TryGetValue("TestMethod", out var testMethodValue)
+                    ? testMethodValue?.ToString() ?? string.Empty
+                    : string.Empty;
 
-                // 2. 查库批量获取 Standard 实体
-                var standards = await _standardRepository.GetByIdsAsync(standardIds, ct);
+                // 规则计算统一委托领域服务（同步调用，不存在 async 无 await 的方法）
+                var dataAreaCount = _domainService.CalculateDataAreaCount(item, package);
 
-                // 3. 提取名称并用 ";" 分割，若查不到则降级显示 Id
-                // 排序后再拼接: TestMethod 会进入 TemplateIndex 匹配条件(MatchesAll 逐字比对),
-                // 若依赖 DB 返回顺序, 同一组标准可能拼出 "A;B" 或 "B;A" 造成索引匹配漂移
-                var testMethod = standards.Any()
-                    ? string.Join(";", standards
-                        .OrderBy(s => s.Id.Value, StringComparer.OrdinalIgnoreCase)
-                        .Select(s => s.StandardCode ?? s.StandardCodeNameEn ?? s.Id.Value))
-                    : string.Join(";", item.StandardIds.Select(id => id?.Value ?? string.Empty));
+                var sampleExpanded = _domainService.ExpandByWashCycle(item, package, WashDataKind.Sample);
+                var sampleResult = _domainService.BuildBookmarkMap(item, package, template, sampleExpanded, WashDataKind.Sample);
 
-                // 合并 package.ParamSet
-                if (package.ParamSet?.Values != null)
-                {
-                    foreach (var kv in package.ParamSet.Values.ToDictionary())
-                    {
-                        runtimeConditions[kv.Key] = kv.Value;
-                    }
-                }
+                var afterWashExpanded = _domainService.ExpandByWashCycle(item, package, WashDataKind.AfterWash);
+                var afterWashResult = _domainService.BuildBookmarkMap(item, package, template, afterWashExpanded, WashDataKind.AfterWash);
 
-                // 追加 TestItemId / TestMethod
-                runtimeConditions["TestItemId"] = item.TestItemId!.Value;
-                runtimeConditions["TestMethod"] = testMethod;
-
-                //-----------------------------------------------------------------
-
-                //显示指定初筛key，要求condition把testitem、method、state等其他传入保存
-                var template = _templateSelectService.FindByIndex(runtimeConditions, preFilterKey: "TestItemId");
-
-                // 需根据 DataSheetModel 的实际构造函数或初始化方式进行调整
                 var model = new DataSheetModel
                 {
                     ReportNumber = pool.Conditions.TryGetValue("ReportNo", out var rnVal)
@@ -110,7 +112,7 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.DataSheetCont
                     ? ExtractInt(cpVal, 1)
                     : 1,
 
-                    DataAreaCount = CalculateDataAreaCount(item,package),
+                    DataAreaCount = dataAreaCount,
 
                     TemplateUrl = template.GetTemplateUrl(),
 
@@ -118,13 +120,11 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.DataSheetCont
 
                     TestMethod = testMethod,
 
-                    TestCondition = TextReplaceHelper.FillTemplate(
-                        template.FindTextTemplate(pool.Conditions).Text,
-                        paramJson),
+                    TestCondition = composition.Text,
 
-                    SampleMap = await CalcuteSampleMapAsync(item, package, template ,ExpandSampleArray(item, package)),
-                      
-                    AfterWashMap = await CalculateAfterWashMapAsync(item, package, template, ExpandAfterWashArray(item, package))
+                    SampleMap = ToSampleMap(sampleResult),
+
+                    AfterWashMap = ToAfterWashMap(afterWashResult)
                 };
                 models.Add(model);
             }
@@ -133,250 +133,41 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.DataSheetCont
         }
 
         /// <summary>
-        /// 参数包分化策略
-        /// 计算每个ParamSet对应的测试点ID列表，返回TestPointPackage列表
-        /// 注意参数包只是为了分配测点，所以只需要考虑测点ID即可
+        /// 把领域层的书签映射结果适配为实体契约 <see cref="SampleMap"/>。
         /// </summary>
-        /// <param name="item"></param>
-        /// <returns></returns>
-        public IReadOnlyList<TestPointPackage> PackByParamSet(CheckListItem item)
+        /// <param name="result">领域服务返回的书签映射聚合结果。</param>
+        /// <returns>模板填充引擎可直接消费的 <see cref="SampleMap"/>。</returns>
+        private static SampleMap ToSampleMap(BookmarkMapResult result)
         {
-            if (item.TestPointParams == null || item.TestPointParams.Count == 0)
-                return Array.Empty<TestPointPackage>();
-
-            //需要把ParamSet中的水洗次数WashCycle去除后再进行比较，不然会影响比较的准确性
-            // 1. 分组键：排除 WashCycle 后的 ParamSet 用于判等
-            var packages = item.TestPointParams
-                .GroupBy(kv =>
-                {     
-                    if (kv.Value?.Values == null)
-                        return "{}"; // 空值统一返回空JSON字符串    
-
-                    // 克隆 Values 字典，若包含 WashCycle 则移除，避免影响参数合并的准确性
-                    var filteredValues = new Dictionary<string, object>();
-                    foreach (var v in kv.Value.Values)
-                    {
-                        if ("WashCycle".Equals(v.Key, StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        filteredValues[v.Key] = v.Value is JsonElement je
-                            ? je.GetRawText() ?? string.Empty   // 拿原始 JSON 文本，若为null则降级为空字符串
-                            : v.Value ?? string.Empty;          // 若v.Value为null，同样降级为空字符串
-                    }
-                    var key = JsonConvert.SerializeObject(filteredValues);
-                    return key;
-                })
-                // 2. 保留原始的 ParamSet (包含 WashCycle)，仅用分组键聚合测点
-                .Select(g => new TestPointPackage(
-                    TestPointIds: g.Select(x => x.Key).OrderBy(k => k).ToList(),
-                    ParamSet: g.First().Value)) // 使用原始 Value
-                .OrderBy(p => p.TestPointIds.First())
-                .ToList();
-
-            return packages;
-        }
-
-        /// <summary>
-        /// dataArea计算策略，兼容涵盖水洗次数的情况
-        /// </summary>
-        /// <param name="item"></param>
-        /// <param name="package"></param>
-        /// <returns></returns>
-        public int CalculateDataAreaCount(CheckListItem item, TestPointPackage package)
-        {
-            //如果非水洗扩展，那么就直接认定，Area个数未package.TestPointIds.Count,
-            //水洗次数分两种：一种是一个测点对应一个水洗次数，另外一种是一种是一个测点对应多个水洗次数
-            //暂定水洗次数字段为WashCycle，格式：1    or   1-2-32-45这样的分割数代表水洗1次2次32次45次
-
-            //故dataArea的需求个数为package.TestPointIds的每个测点在item.TestPointParams中对应的水洗次数之和
-            //因为在一个参数包中水洗次数不同不影响参数合并
-
-            if (item.TestPointParams == null || item.TestPointParams.Count == 0)
-                return package.TestPointIds.Count;
-
-            int totalCount = 0;
-
-            foreach (var testPointId in package.TestPointIds)
+            return new SampleMap
             {
-                if (!item.TestPointParams.TryGetValue(testPointId, out var paramSet) || paramSet?.Values == null)
-                {
-                    totalCount += 1; // 无参数配置，默认1个Area
-                    continue;
-                }
-
-                // 尝试从 ParamSet.Values 中获取 WashCycle 字段
-                if (paramSet.Values.TryGetValue("WashCycle", out var washCycleObj) && washCycleObj is string washCycleStr)
-                {
-                    // 格式如 "1-2-32-45"，按 '-' 分割代表水洗1次、2次、32次、45次
-                    var washCount = washCycleStr.Split('-', StringSplitOptions.RemoveEmptyEntries).Length;
-                    totalCount += washCount > 0 ? washCount : 1;
-                }
-                else
-                {
-                    totalCount += 1; // 非水洗扩展，每个测点占1个Area
-                }
-            }
-
-            return totalCount;
-        }
-
-        /// <summary>
-        /// 根据水洗次数扩展测点数组
-        /// </summary>
-        public string[] ExpandSampleArray(CheckListItem item, TestPointPackage package)
-        {
-            if (item.TestPointParams == null || item.TestPointParams.Count == 0)
-                return package.TestPointIds.ToArray();
-
-            var expandedSamples = new List<string>();
-
-            foreach (var testPointId in package.TestPointIds)
-            {
-                if (!item.TestPointParams.TryGetValue(testPointId, out var paramSet) || paramSet?.Values == null)
-                {
-                    expandedSamples.Add(testPointId); // 无参数配置，默认1次
-                    continue;
-                }
-
-                if (paramSet.Values.TryGetValue("WashCycle", out var washCycleObj) && washCycleObj is string washCycleStr)
-                {
-                    var washCount = washCycleStr.Split('-', StringSplitOptions.RemoveEmptyEntries).Length;
-                    int repeatCount = washCount > 0 ? washCount : 1;
-
-                    for (int i = 0; i < repeatCount; i++)
-                    {
-                        expandedSamples.Add(testPointId); // 按水洗次数重复添加测点
-                    }
-                }
-                else
-                {
-                    expandedSamples.Add(testPointId); // 非水洗扩展，添加1次
-                }
-            }
-
-            return expandedSamples.ToArray();
-        }
-
-        public async Task<SampleMap> CalcuteSampleMapAsync(CheckListItem item, TestPointPackage package, Template template , string[] samplemap) 
-        {
-            //获取Template对应的TemplateStructure数据，
-            //获取 SampleDataAreaCount 字段的值（模板预留的试样编号格数）
-            //例如 SampleDataAreaCount = 3，可以得出对应的书签为 [Sample_data_1, Sample_data_2, Sample_data_3]
-            //注：TemplateStructure.SampleResultAreaCount（试验结果区）当前未参与本模型的计算
-            //这和书签的内容对应，故可以根据之前的水洗扩展map对对应的samplemap进行赋值，具体规则为：
-            //      1.如果实际的samplemap的个数大于 SampleDataAreaCount，多出的 sample_data_x 需由模板引擎复制 data 表后再填充，isAppend 记录是否需要复制data表格
-            //      2.如果实际的samplemap的个数小于等于 SampleDataAreaCount，直接赋值，isAppend 记录 false
-            //      3.例外：如果没有sample，跳过即可
-            // 1. 获取模板信息（假设已从数据库获取）
-
-            int sampleDataCount = template.TemplateStructure.SampleDataAreaCount;
-
-            // 例外：没有测点（或展开后为空）时无需任何 sample 映射。
-            // 注：这里不再调用 CalculateDataAreaCount 做二次计算 —— 它与展开结果长度恒等，
-            // 两套同构算法并存会在日后一处口径变更时悄悄分叉，故统一以展开结果为准。
-            if (samplemap == null || samplemap.Length == 0)
-            {
-                return new SampleMap();
-            }
-
-            // 生成 SampleMetaData 字典：按展开后的测点顺序铺平，Sample_data_{i+1} 对应第 i 个测点
-            var sampleMap = new SampleMap
-            {
-                SampleMetaData = new Dictionary<string, string>(samplemap.Length)
+                SampleMetaData = new Dictionary<string, string>(result.Map),
+                IsAppend = result.IsAppend
             };
-
-            for (int i = 0; i < samplemap.Length; i++)
-            {
-                sampleMap.SampleMetaData[$"Sample_data_{i + 1}"] = samplemap[i];
-            }
-
-            // 需求口径：测点数「超过」模板预留格数才需要复制整块 data 表（相等时刚好填满，不复制）。
-            // 另：SampleDataAreaCount 未配置时为 0（TemplateStructure 无初始化器，工厂只校验 < 0），
-            // 此时若直接比较会恒为 true，故必须先要求模板确实配置了 sample 区。
-            sampleMap.IsAppend = sampleDataCount > 0 && samplemap.Length > sampleDataCount;
-
-            return sampleMap;
         }
 
         /// <summary>
-        /// 计算AfterWashMap
+        /// 把领域层的书签映射结果适配为实体契约 <see cref="AfterWashMap"/>。
         /// </summary>
-        public async Task<AfterWashMap> CalculateAfterWashMapAsync(CheckListItem item, TestPointPackage package, Template template ,string[] afterWashArray)
+        /// <param name="result">领域服务返回的书签映射聚合结果。</param>
+        /// <returns>模板填充引擎可直接消费的 <see cref="AfterWashMap"/>。</returns>
+        private static AfterWashMap ToAfterWashMap(BookmarkMapResult result)
         {
-            // 1. 获取模板信息（假设已从数据库获取）
-            int afterWashDataCount = template.TemplateStructure.AfterWashDataCount; // templateInfo.AfterWashDataCount;
-
-            if ( afterWashDataCount <= 0)
+            return new AfterWashMap
             {
-                return new AfterWashMap();
-            }
-
-            // 2. 例外：没有水洗数据（或展开后为空）时无需任何映射。
-            // 注：不再调用 CalculateDataAreaCount 做二次同构计算，统一以展开结果为准。
-            if (afterWashArray == null || afterWashArray.Length == 0)
-            {
-                return new AfterWashMap();
-            }
-
-            // 3. 生成 AfterWashMetaData 字典：After_wash_data_{i+1} 对应第 i 个水洗次数
-            var afterWashMap = new AfterWashMap
-            {
-                AfterWashMetaData = new Dictionary<string, string>(afterWashArray.Length)
+                AfterWashMetaData = new Dictionary<string, string>(result.Map),
+                IsAppend = result.IsAppend
             };
-
-            for (int i = 0; i < afterWashArray.Length; i++)
-            {
-                afterWashMap.AfterWashMetaData[$"After_wash_data_{i + 1}"] = afterWashArray[i];
-            }
-
-            // 4. 需求口径：水洗格数「超过」模板预留格数才需要复制整块表（相等时刚好填满，不复制）
-            afterWashMap.IsAppend = afterWashDataCount > 0 && afterWashArray.Length > afterWashDataCount;
-
-            return afterWashMap;
         }
 
         /// <summary>
-        /// 根据水洗次数扩展AfterWash数组
+        /// 从条件值中安全提取字符串。支持 <see cref="JsonElement"/>、<see cref="ParamValue"/> 与原生类型。
+        ///
+        /// 说明：本方法与 <see cref="ExtractInt"/> 服务于 <see cref="DataSheetModel"/> 的
+        /// ReportNumber / SheetCount 取值降级，属应用层组装职责，故不下沉领域层。
         /// </summary>
-        public string[] ExpandAfterWashArray(CheckListItem item, TestPointPackage package)
-        {
-            if (item.TestPointParams == null || item.TestPointParams.Count == 0)
-            {
-                // 与下方兜底口径一致：无参数配置视为水洗 1 次
-                // （原实现误返回测点 ID 数组，会把测点号填进水洗次数列）
-                return Enumerable.Repeat("1", package.TestPointIds.Count).ToArray();
-            }
-
-            var expandedAfterWashes = new List<string>();
-
-            foreach (var testPointId in package.TestPointIds)
-            {
-                if (!item.TestPointParams.TryGetValue(testPointId, out var paramSet) || paramSet?.Values == null)
-                {
-                    expandedAfterWashes.Add("1"); // 无参数配置，默认水洗 1 次
-                    continue;
-                }
-
-                if (paramSet.Values.TryGetValue("WashCycle", out var washCycleObj) && washCycleObj is string washCycleStr)
-                {
-                    // 解析水洗次数字符串，如 "1-23-32-45"
-                    var washNumbers = washCycleStr.Split('-', StringSplitOptions.RemoveEmptyEntries);
-
-                    // 为每个水洗次数添加对应的值
-                    foreach (var washNumber in washNumbers)
-                    {
-                        expandedAfterWashes.Add(washNumber.Trim());
-                    }
-                }
-                else
-                {
-                    expandedAfterWashes.Add("1"); // 非水洗扩展，默认水洗 1 次
-                }
-            }
-
-            return expandedAfterWashes.ToArray();
-        }
-
+        /// <param name="raw">原始条件值，可为 null。</param>
+        /// <returns>提取到的字符串；无法识别或为 null 时返回空字符串。</returns>
         private static string ExtractString(object? raw)
         {
             if (raw == null) return string.Empty;
@@ -403,6 +194,12 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.DataSheetCont
             }
         }
 
+        /// <summary>
+        /// 从条件值中安全提取整数。支持 <see cref="JsonElement"/>、<see cref="ParamValue"/> 与原生数值类型。
+        /// </summary>
+        /// <param name="raw">原始条件值，可为 null。</param>
+        /// <param name="defaultValue">无法解析时使用的默认值。</param>
+        /// <returns>提取到的整数；无法解析或为 null 时返回 <paramref name="defaultValue"/>。</returns>
         private static int ExtractInt(object? raw, int defaultValue = 1)
         {
             if (raw == null) return defaultValue;

@@ -19,7 +19,6 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.DataSheetCont
     {
         private readonly ICheckListRepository _checkListRepository;
         private readonly IConditionPoolRepository _conditionPoolRepository;
-        private readonly IDataSheetModelGenerator _dataSheetModelGenerator;
         private readonly IFileStorageService _fileStorageService;
         private readonly DataSheetFillingEngine _dataSheetFillingEngine;
         private readonly ILogger<DataSheetService> _logger;
@@ -37,7 +36,6 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.DataSheetCont
             IDataSheetRepository dataSheetRepository,
             IWebHostEnvironment env,
             IFileStorageService fileStorageService,
-            IDataSheetModelGenerator dataSheetModelGenerator,
             IDataSheetBatchRepository dataSheetBatchRepository)
         {
             _unitOfWork = unitOfWork;
@@ -48,7 +46,6 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.DataSheetCont
             _conditionPoolRepository = conditionPoolRepository;
             _dataSheetFillingEngine = dataSheetFillingEngine;
             _dataSheetRepository = dataSheetRepository;
-            _dataSheetModelGenerator = dataSheetModelGenerator;
             _dataSheetBatchRepository = dataSheetBatchRepository;
         }
 

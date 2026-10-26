@@ -659,3 +659,9 @@ $$\text{cols} = \frac{A}{B},\qquad \text{requiredBlocks} = \left\lceil \frac{M}{
 $$\text{新块第 } k \text{ 块第 } c \text{ 列编号} = A + (k-1)\cdot\text{cols} + c$$
 
 其中 `A` = docx 中某前缀书签的**最大编号**，`B` = 含该前缀书签的**不同行数**（单块模板为 1），`M` = 模型给出的全量数量。空位留空但**书签按算法占位**，保证下次 `M` 增长无需再扩容。
+
+### 11.10 文档维护记录
+
+| 基线 | 变更 |
+|---|---|
+| `bc627f0` | 文件由 `README.md` 更名为 `AGENTS.md`：避免与项目根 README 混淆，且复数形式可被主流 AI 编码工具自动发现并挂载为目录上下文。内容未变更。 |

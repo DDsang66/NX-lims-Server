@@ -4,8 +4,8 @@
 > 任何人（含 AI）接手模板相关改动前请先读完。
 >
 > 关联文档：
-> - `WordTemplateAdapter\README.md` —— 按报告类型分发的各填充引擎
-> - `src\Application\Service\DataSheetContext\README.md` —— 上游 DataSheetModel 生成链路
+> - `WordTemplateAdapter\AGENTS.md` —— 按报告类型分发的各填充引擎
+> - `src\Application\Service\DataSheetContext\AGENTS.md` —— 上游 DataSheetModel 生成链路
 >
 > 最后更新：基于 `7af8b1b`
 
@@ -326,3 +326,11 @@ E 涉及 XML 结构改写，务必先补 §4.3 的模板契约测试与书签大
 > **模板的约定不在文档里，在 `WordTemplateValidator` + `BuildBookmarkValues` + `MatchesAll` 三处代码里。**
 > 改模板前查这三个，改约定时三处必须同步 —— 任何一处不同步，故障都会以"静默空白/静默错位"的形式出现，
 > 而不是报错。
+
+---
+
+## 7. 修改日志
+
+| 基线 | 变更 |
+|---|---|
+| `bc627f0` | 文件由 `README.md` 更名为 `AGENTS.md`：避免与项目根 README 混淆，且复数形式可被主流 AI 编码工具自动发现并挂载为目录上下文。内容未变更（仅同步更新指向 `WordTemplateAdapter\AGENTS.md` 与 `DataSheetContext\AGENTS.md` 的引用）。 |
