@@ -202,12 +202,20 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             //计算calculatedFiberResult中每个成分列Rate
             calculatedFiberResult = CalculateRates(calculatedFiberResult);
 
+            // 2.5) 父槽下插展示子行（纤维素父槽、复合纤维父行，各一遍、互斥）。
+            // **必须排在 CalculateRates 之后**：这时父行 Rate 已是最终值，子行按占比切它一份；
+            // 子行没有称量值、也不参加上面那趟分母，所以父行与所有既有行的数一个都不动。
+            // 哪些表要它、哪些表要跳过它，由展示层（适配器）与下面几处消费者各自判 IsDisplaySubRow。
+            calculatedFiberResult = AppendCellulosicSubRows(calculatedFiberResult);
+            calculatedFiberResult = AppendBicomponentSubRows(calculatedFiberResult);
+
             // 3) 计算实际成分数（多组分需要统计 FiberRows 中的成分行）
+            //    下插的展示子行不算成分 —— 它们只是父行那 100% 的拆法。
             var actualComponentCount = Type == AnalysisType.Multiple
                 ? calculatedFiberResult
                     .OfType<MultiCalculatedFiberItem>()
                     .SelectMany(m => m.MultiFiberRowUnits ?? new List<MultiFiberRowUnit>())
-                    .Count(r => r.Section == "/" && !string.IsNullOrWhiteSpace(r.Sum))
+                    .Count(r => !r.IsDisplaySubRow && r.Section == "/" && !string.IsNullOrWhiteSpace(r.Sum))
                 : calculatedFiberResult.Count;
 
             result = result.WithAnalysisItems(calculatedFiberResult, actualComponentCount);
@@ -562,6 +570,179 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
 
             return updatedItems;
         }
+
+        /// <summary>
+        /// 在每条纤维素父槽（<c>*cellulosic fibre</c> / <c>*Regenerated cellulose fibre</c>）之下
+        /// **插入子纤维行**，让称量表看得出父行那 100% 是怎么拆的。
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// 纯展示：子行的 <see cref="MultiFiberRowUnit.Rate"/> 是父行 Rate 按**公定重量份额**
+        /// （<c>pᵢ·(1+MRᵢ/100)</c> 归一，见 <see cref="CellulosicSubShares"/>）切出来的一份，
+        /// 没有称量值（GSMTrail / RateTrail / Avg / Correct 全 0），因此不参加 Rate 分母
+        /// （<see cref="CalculateRates"/> 已经跑完）、也不进结果表与成分数
+        /// （那两处都跳过 <see cref="MultiFiberRowUnit.IsCellulosicSubRow"/>）。
+        /// </para>
+        /// <para>
+        /// 父行 Rate 是未取整的全精度，而报告印两位小数，所以这里按 **F2** 切，
+        /// 并让**最后一条吸收尾差**（仅当占比合计正好 100）——
+        /// 报告上子行加起来正好等于父行印出的那个数，不会出现 50.00 + 50.00 却引出一分钱的差。
+        /// 取整方式跟 <c>ToString("F2")</c> 一致用 AwayFromZero，否则中位数的行会和印出来的数对不上。
+        /// </para>
+        /// <para>
+        /// 占比合计不等于 100 时**不吸收尾差**：那是录入本身没凑够 100，报告如实印各份，不替它凑整。
+        /// </para>
+        /// </remarks>
+        private List<CalculatedFiberResult> AppendCellulosicSubRows(List<CalculatedFiberResult> calculatedFiberResult)
+        {
+            return calculatedFiberResult.Select(item =>
+            {
+                if (item is not MultiCalculatedFiberItem multi || multi.MultiFiberRowUnits is null)
+                    return item;
+
+                var expanded = new List<MultiFiberRowUnit>(multi.MultiFiberRowUnits.Count);
+
+                foreach (var row in multi.MultiFiberRowUnits)
+                {
+                    expanded.Add(row);
+
+                    var subs = ExpandedCellulosicSubFibers(row);
+                    if (subs.Count == 0) continue;
+
+                    var parentRate = decimal.Round(row.Rate, 2, MidpointRounding.AwayFromZero);
+                    var absorbResidual = subs.Sum(s => s.Percentage) == 100m;
+                    // 份额按**公定重量**分（wᵢ ∝ pᵢ·(1+MRᵢ/100)）：pᵢ 是净干重量份额，直接用它切
+                    // 只在各子纤维回潮率相同时才成立（见 CellulosicSubWeights）。
+                    var shares = CellulosicSubShares(row);
+                    decimal allocated = 0m;
+
+                    for (int i = 0; i < subs.Count; i++)
+                    {
+                        var sub = subs[i];
+
+                        var rate = absorbResidual && i == subs.Count - 1
+                            ? parentRate - allocated
+                            : decimal.Round(parentRate * shares[i], 2, MidpointRounding.AwayFromZero);
+                        allocated += rate;
+
+                        // 回潮率与其余行同一套："表里有这个数就印（真值 0 也印 0.00%），查不到留空"。
+                        var moistureRegain = FindMoistureRegain(sub.FiberName);
+
+                        expanded.Add(new MultiFiberRowUnit
+                        {
+                            // Section 沿用父行 —— 适配器去重后这一格自然留空，称量瓶表那边会把它整行过滤掉
+                            Section = row.Section,
+                            Sum = sub.FiberName,
+                            MoistureRegain = moistureRegain ?? 0m,
+                            MoistureRegainKnown = moistureRegain is not null,
+                            Rate = rate,
+                            IsCellulosicSubRow = true
+                        });
+                    }
+                }
+
+                return multi with { MultiFiberRowUnits = expanded };
+            }).ToList();
+        }
+
+        /// <summary>
+        /// 在每条复合纤维父行（<c>Bicomponent Fiber</c> / <c>Biconstituent Fiber</c>）之下
+        /// **插入两个组分子行**，让称量表看得出这一行是怎么拆的。
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// 纯展示，与 <see cref="AppendCellulosicSubRows"/> 同一套约束：没有称量值
+        /// （GSMTrail / RateTrail / Avg / Correct 全 0），<see cref="MultiFiberRowUnit.Rate"/>
+        /// 只是父行印出的 Rate 按**拆干质量**切出来的一份，不参加 Rate 分母、
+        /// 也不进结果表与成分数（那两处都跳过 <see cref="MultiFiberRowUnit.IsDisplaySubRow"/>）。
+        /// </para>
+        /// <para>
+        /// 份额必须与 Test Result 括号里的百分比同源 —— 直接复用 <see cref="DecomposeBicomponent"/>：
+        /// 残留 = 子纤维最后一个，被溶解 = 父行总重 − 残留，各按自己名字的回潮率加权
+        /// （<c>wᵢ = (gsm1+gsm2)·(1+MRᵢ/100)</c>，与 Rate 公式同一口径）。
+        /// 顺序照录入顺序（subs[0] = 被溶解、subs[1] = 残留），与括号 `(s1 s2)` 一致。
+        /// </para>
+        /// <para>
+        /// 只处理**恰好两条**子纤维 —— <see cref="DecomposeBicomponent"/> 与
+        /// <see cref="PostProcessBicomponent"/> 都是这个前提；少于两条不插，维持改动前的输出。
+        /// 拆不出质量（合计 &lt;= 0）时同样不插，绝不硬猜比例。
+        /// </para>
+        /// </remarks>
+        private List<CalculatedFiberResult> AppendBicomponentSubRows(
+            List<CalculatedFiberResult> calculatedFiberResult)
+        {
+            return calculatedFiberResult.Select(item =>
+            {
+                if (item is not MultiCalculatedFiberItem multi || multi.MultiFiberRowUnits is null)
+                    return item;
+
+                var expanded = new List<MultiFiberRowUnit>(multi.MultiFiberRowUnits.Count);
+
+                foreach (var row in multi.MultiFiberRowUnits)
+                {
+                    expanded.Add(row);
+
+                    if (!IsBicomponentFiber(row.Sum) || row.BicomponentSubFibers.Count != 2)
+                        continue;
+
+                    var subs = row.BicomponentSubFibers;
+                    var (residueDry, dissolvedDry) = DecomposeBicomponent(
+                        row.GSMTrail1, row.GSMTrail2, subs);
+                    var dryTotal = residueDry + dissolvedDry;
+                    if (dryTotal <= 0m) continue;
+
+                    // 残留是**最后一个**（与 ResidueGsm / PostProcessBicomponent 同一口径）。
+                    var weights = new[]
+                    {
+                        dissolvedDry,
+                        residueDry,
+                    };
+
+                    var parentRate = decimal.Round(row.Rate, 2, MidpointRounding.AwayFromZero);
+                    decimal allocated = 0m;
+
+                    for (int i = 0; i < subs.Count; i++)
+                    {
+                        var rate = i == subs.Count - 1
+                            ? parentRate - allocated
+                            : decimal.Round(
+                                parentRate * (weights[i] / dryTotal), 2, MidpointRounding.AwayFromZero);
+                        allocated += rate;
+
+                        // 回潮率与其余行同一套："表里有这个数就印（真值 0 也印 0.00%），查不到留空"。
+                        var moistureRegain = FindMoistureRegain(subs[i].FiberName);
+
+                        expanded.Add(new MultiFiberRowUnit
+                        {
+                            // Section 沿用父行 —— 适配器去重后这一格自然留空，称量瓶表那边会整行过滤掉
+                            Section = row.Section,
+                            Sum = subs[i].FiberName,
+                            MoistureRegain = moistureRegain ?? 0m,
+                            MoistureRegainKnown = moistureRegain is not null,
+                            Rate = rate,
+                            IsBicomponentSubRow = true
+                        });
+                    }
+                }
+
+                return multi with { MultiFiberRowUnits = expanded };
+            }).ToList();
+        }
+
+        /// <summary>
+        /// 这一行是不是「纤维素父槽」—— 报告里按子纤维展开的那两条（普通 / 再生）。
+        /// 闸门按名字判，与结果表 <see cref="ExtractComponents"/> 的展开口径同源，别各判各的。
+        /// </summary>
+        private static bool IsCellulosicParent(string? fiberName)
+            => fiberName == "*cellulosic fibre" || fiberName == "*Regenerated cellulose fibre";
+
+        /// <summary>父槽下真正要展开的子纤维（名字非空、占比 &gt; 0）。</summary>
+        private static List<CellulosicSubFiber> ExpandedCellulosicSubFibers(MultiFiberRowUnit row)
+            => IsCellulosicParent(row.Sum)
+                ? row.CellulosicSubFibers
+                    .Where(s => !string.IsNullOrWhiteSpace(s.FiberName) && s.Percentage > 0)
+                    .ToList()
+                : new List<CellulosicSubFiber>();
 
         /// <summary>
         /// 计算结果、标签
@@ -1016,17 +1197,23 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                     case MultiCalculatedFiberItem multi when multi.MultiFiberRowUnits != null:
                         foreach (var r in multi.MultiFiberRowUnits)
                         {
+                            // 父槽下插的展示子行先跳过：它们的那一份已经由下面这支 "父行 × 占比" 展开过，
+                            // 放进来就会被算两遍（50% 变 100%）。复合纤维子行同理 —— 父行那一份照旧
+                            // 由 PostProcessBicomponent 带括号印出。
+                            if (r.IsDisplaySubRow)
+                                continue;
+
                             if (string.IsNullOrWhiteSpace(r.Sum) || r.Sum.Contains('/'))
                                 continue;  // 排除缩写拼接的起始行（如 E/T）
 
-                            // cellulosic fibre 展开为子纤维
-                            if ((r.Sum == "*cellulosic fibre" || r.Sum == "*Regenerated cellulose fibre") && r.CellulosicSubFibers.Count > 0)
+                            // cellulosic fibre 展开为子纤维：份额与称量表子行同源（同一份 CellulosicSubShares），
+                            // 别在这里另算一遍 pᵢ/100 —— 那会印出两套数。
+                            if (IsCellulosicParent(r.Sum) && r.CellulosicSubFibers.Count > 0)
                             {
-                                foreach (var sub in r.CellulosicSubFibers)
-                                {
-                                    if (!string.IsNullOrWhiteSpace(sub.FiberName) && sub.Percentage > 0)
-                                        components.Add((sub.FiberName, r.Rate * sub.Percentage / 100m));
-                                }
+                                var subs = ExpandedCellulosicSubFibers(r);
+                                var shares = CellulosicSubShares(r);
+                                for (int s = 0; s < subs.Count; s++)
+                                    components.Add((subs[s].FiberName, r.Rate * shares[s]));
                             }
                             else if (IsBicomponentFiber(r.Sum) && r.BicomponentSubFibers.Count > 0)
                             {
@@ -1082,27 +1269,38 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// <summary>
         /// 这个成分行的回潮率**该不该印到报告上**。
         ///
-        /// 两道闸，缺一不可：
+        /// 三道闸，缺一不可：
         /// ① 纤维表里真有这个数 —— **真值 0 也算有**；
-        /// ② 不是双组分父行 —— 父行那个加权值只用来算，不上报告。
+        /// ② 不是双组分父行 —— 父行那个加权值只用来算，不上报告；
+        /// ③ 不是纤维素父槽 —— 它本身没有回潮率（见 <see cref="CellulosicMoistureRegain"/>），
+        ///    折算出来的那个数只用来算。子纤维各自的行照常印。
         ///
-        /// 两道都不满足时 MR 栏留空。组头行（`Sum` 是 `M/E/S` 这种缩写串）走①就被挡下了。
+        /// 不满足时 MR 栏留空、页脚也不列这一条（适配器两处用的是同一判据）。
+        /// 组头行（`Sum` 是 `M/E/S` 这种缩写串）走①就被挡下了。
         /// </summary>
         private bool IsMoistureRegainKnown(MultiFiberRowUnit row)
-            => !IsBicomponentFiber(row.Sum) && FindMoistureRegain(row.Sum) is not null;
+            => !IsBicomponentFiber(row.Sum)
+               && !IsCellulosicParent(row.Sum)
+               && FindMoistureRegain(row.Sum) is not null;
 
         /// <summary>
         /// 某个成分行**用来算**的回潮率。
         ///
-        /// 双组分父行不能按名字查：`Bicomponent Fiber` / `Biconstituent Fiber` 这两行**不在
-        /// `fiber_database` 里**（实测精确命中 0 行），查出来是 0 —— 等于"父行不回潮"，会把
-        /// 父行的百分比压低。正确做法是把它按两个子成分拆开、各按自己的回潮率折干后相加，
-        /// 再折成一个**加权回潮率**：干重/湿重 − 1（见 <see cref="DecomposeBicomponent"/>）。
+        /// 两类父行不能按名字查，各有自己的折算：
+        /// **纤维素父槽**（`*cellulosic fibre` / `*Regenerated cellulose fibre`）本身没有回潮率，
+        /// 由子纤维按占比折算（见 <see cref="CellulosicMoistureRegain"/>）；
+        /// **双组分父行**（`Bicomponent Fiber` / `Biconstituent Fiber`）不在 `fiber_database` 里，
+        /// 按两个子成分拆开、各按自己的回潮率折干后相加，再折成加权回潮率：干重/湿重 − 1
+        /// （见 <see cref="DecomposeBicomponent"/>）。
         ///
-        /// 非双组分行、子行不足两条、或拆不出质量时，一律退回按名字查表 —— 逐字是改动前的行为。
+        /// 其余行、子行不足两条、或拆不出质量 / 子纤维查不到回潮率时，一律退回按名字查表
+        /// —— 逐字是改动前的行为。
         /// </summary>
         private decimal EffectiveMoistureRegain(MultiFiberRowUnit row)
         {
+            if (IsCellulosicParent(row.Sum))
+                return CellulosicMoistureRegain(row) ?? LookupMoistureRegain(row.Sum);
+
             if (!IsBicomponentFiber(row.Sum) || row.BicomponentSubFibers.Count < 2)
                 return LookupMoistureRegain(row.Sum);
 
@@ -1116,6 +1314,97 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         }
 
         /// <summary>
+        /// 纤维素父槽的回潮率**由子纤维折算**：<c>MR = Σ(pᵢ·(1+MRᵢ/100)) ÷ Σpᵢ × 100 − 100</c>，
+        /// 即各子纤维回潮率按净干占比 <c>pᵢ</c> 加权。
+        ///
+        /// <para>
+        /// <c>pᵢ</c> 是**净干重量**份额（与称量表 <see cref="MultiFiberRowUnit.Avg"/> 同一口径），
+        /// 公定重量权重是 <c>pᵢ·(1+MRᵢ/100)</c>，两者之比就是父槽的 <c>(1+MR/100)</c>。
+        /// 单条 100% / 13.00 → 13.00；棉 50 / 亚麻 50 → (50·1.085 + 50·1.12) ÷ 100 − 1 = 10.25%。
+        /// </para>
+        /// <para>
+        /// **不能写成调和平均**：那等于把 <c>pᵢ</c> 当公定重量份额，与称量表的 Avg 口径矛盾 ——
+        /// 棉/亚麻 50/50 会折成 10.22 而不是 10.25，且子行 Rate 会被直接拆成 50.00 / 50.00。
+        /// </para>
+        /// <para>
+        /// 再生那几个子纤维在每一列都同值，折算结果与表里父槽那格一样 —— Rate 零漂移；
+        /// 天然侧混录（棉 8.5 / 麻 12.0）才会动。
+        /// </para>
+        /// <para>
+        /// 返回 <c>null</c> 的三种情况（调用方退回按名字查表，即改动前的行为）：没录子纤维；
+        /// 有子纤维的回潮率查不到；或查到的值 <c>&lt;= 0</c> —— 表里的 0.00 表示"该标准未收录"
+        /// （见 `Scripts/InitFiberDatabase.sql`），拿它折干会把父行压得离谱。
+        /// </para>
+        /// </summary>
+        private decimal? CellulosicMoistureRegain(MultiFiberRowUnit row)
+        {
+            var weights = CellulosicSubWeights(row);
+            if (weights is null) return null;
+
+            var netDry = weights.Sum(w => w.NetDry);
+            var official = weights.Sum(w => w.Official);
+            if (netDry <= 0m || official <= 0m) return null;
+
+            return official / netDry * 100m - 100m;
+        }
+
+        /// <summary>
+        /// 父槽下每条子纤维的**净干**占比 <c>pᵢ</c> 与**公定**权重 <c>pᵢ·(1+MRᵢ/100)</c>。
+        ///
+        /// <para>
+        /// 父槽的 Rate 是公定口径，分给子纤维必须按公定权重分：
+        /// <c>Rateᵢ = 父行 Rate × 公定ᵢ ÷ Σ公定</c>。直接按 <c>pᵢ</c> 分只在各子纤维回潮率相同时才碰巧成立。
+        /// </para>
+        /// <para>
+        /// 任一条子纤维的回潮率查不到或 <c>&lt;= 0</c> 时返回 <c>null</c>：调用方退回按 <c>pᵢ</c> 分、
+        /// 父槽退回按名字查表 —— 改动前的行为。不能把查不到的当 0 折干（那会让它凭空占重）。
+        /// </para>
+        /// </summary>
+        private List<(CellulosicSubFiber Sub, decimal NetDry, decimal Official)>? CellulosicSubWeights(
+            MultiFiberRowUnit row)
+        {
+            if (!IsCellulosicParent(row.Sum)) return null;
+
+            var subs = ExpandedCellulosicSubFibers(row);
+            if (subs.Count == 0) return null;
+
+            var weights = new List<(CellulosicSubFiber Sub, decimal NetDry, decimal Official)>(subs.Count);
+            foreach (var sub in subs)
+            {
+                var moistureRegain = FindMoistureRegain(sub.FiberName);
+                if (moistureRegain is null || moistureRegain.Value <= 0m) return null;
+
+                weights.Add((sub, sub.Percentage, sub.Percentage * (1m + moistureRegain.Value / 100m)));
+            }
+
+            return weights;
+        }
+
+        /// <summary>
+        /// 父槽下每条子纤维占父行的份额（0~1，与 <see cref="ExpandedCellulosicSubFibers"/> 同序）。
+        /// 回潮率都可用时按公定权重分，否则退回按净干占比 <c>pᵢ</c> 分。
+        ///
+        /// 称量表子行与结果表展开**必须用同一份**，否则两处各印一套数。
+        /// </summary>
+        private List<decimal> CellulosicSubShares(MultiFiberRowUnit row)
+        {
+            var weights = CellulosicSubWeights(row);
+            if (weights is null)
+            {
+                var subs = ExpandedCellulosicSubFibers(row);
+                var netDryTotal = subs.Sum(s => s.Percentage);
+                return netDryTotal <= 0m
+                    ? subs.Select(_ => 0m).ToList()
+                    : subs.Select(s => s.Percentage / netDryTotal).ToList();
+            }
+
+            var officialTotal = weights.Sum(w => w.Official);
+            return officialTotal <= 0m
+                ? weights.Select(_ => 0m).ToList()
+                : weights.Select(w => w.Official / officialTotal).ToList();
+        }
+
+        /// <summary>
         /// 某个成分行**用来算**的重量份额：优先用扣完增量的 <see cref="MultiFiberRowUnit.DeductedAvg"/>；
         /// 为空（反序列化 / 直接构造的行）时退回 <c>Avg × Correct</c> 。
         /// </summary>
@@ -1125,12 +1414,13 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// <summary>
         /// 某个成分行**印到报告上**的回潮率（MR 栏 / 页脚汇总）。
         ///
-        /// 双组分父行恒为 0，**刻意与 <see cref="EffectiveMoistureRegain"/> 不同** ——
-        /// 那个加权值只用来算，不上报告（MR 栏保持空白、页脚不多一条）。
+        /// 双组分父行与纤维素父槽恒为 0，**刻意与 <see cref="EffectiveMoistureRegain"/> 不同** ——
+        /// 那两个折算值只用来算，不上报告（MR 栏保持空白、页脚不多一条，
+        /// 真正的门是 <see cref="IsMoistureRegainKnown"/>）。
         /// 别为了"一致"把这里改回 Effective：要让报告显示它，是产品决定，不是修 bug。
         /// </summary>
         private decimal DisplayedMoistureRegain(MultiFiberRowUnit row)
-            => IsBicomponentFiber(row.Sum) ? 0m : EffectiveMoistureRegain(row);
+            => IsBicomponentFiber(row.Sum) || IsCellulosicParent(row.Sum) ? 0m : EffectiveMoistureRegain(row);
 
         /// <summary>
         /// 安全除法：除数为0时返回0，避免异常

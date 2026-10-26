@@ -219,9 +219,15 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
                                 rowIdx++;
                             }
 
-                            // Bottle / Crucible 编号
+                            // Bottle / Crucible 编号与 Weighing Bottle 表**只认真实成分行**：
+                            // 父槽下插的子行没有称量值（GSMTrail 全 0），进去会印出「瓶重 = 总重」的假数据，
+                            // 坩埚数也会多算几支。结果表那一份（上面 ExpandMultiFiberRowUnits）照旧带它们。
+                            var bottleUnits = multi.MultiFiberRowUnits
+                                .Where(u => !u.IsDisplaySubRow)
+                                .ToList();
+
                             // Bottle = 唯一 Yarn 名
-                            var yarnNames = multi.MultiFiberRowUnits
+                            var yarnNames = bottleUnits
                                 .Select(u => u.Section)
                                 .Where(s => !string.IsNullOrWhiteSpace(s) && s != "/")
                                 .Distinct()
@@ -231,7 +237,7 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
                             var crucibleCounts = new List<int>();
                             int groupCount = 0;
                             string lastSection = "";
-                            foreach (var unit in multi.MultiFiberRowUnits)
+                            foreach (var unit in bottleUnits)
                             {
                                 var section = unit.Section ?? "";
                                 if (!string.IsNullOrWhiteSpace(section) && section != "/" && section != lastSection)
@@ -267,8 +273,8 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
                                     bottleTexts.Concat(crucibleTexts));
                             }
 
-                            // Weighing Bottle 表
-                            var weighingData = ExpandWeighingBottleData(multi.MultiFiberRowUnits, seed);
+                            // Weighing Bottle 表 —— 行号按**过滤后**的行序编（它有自己那套 Description/Component 书签）
+                            var weighingData = ExpandWeighingBottleData(bottleUnits, seed);
                             foreach (var kv in weighingData)
                                 flatData[kv.Key] = kv.Value;
                         }
@@ -318,7 +324,9 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
 
                 // 写入当前行的所有字段
                 result[$"Section_{rowIndex}"] = sectionValue;
-                result[$"Sum_{rowIndex}"] = unit.Sum;
+                // 父槽下插的展示子行（纤维素 / 复合纤维）**缩进两格**，一眼看出它是上一行拆出来的。
+                // 缩进只发生在展示层 —— 领域层存的仍是光名字（页脚汇总、结果表都按原名认）。
+                result[$"Sum_{rowIndex}"] = unit.IsDisplaySubRow ? "  " + unit.Sum : unit.Sum;
                 result[$"GSMTrail1_{rowIndex}"] = unit.GSMTrail1 == 0 ? "" : unit.GSMTrail1.ToString("F4");
                 result[$"GSMTrail2_{rowIndex}"] = unit.GSMTrail2 == 0 ? "" : unit.GSMTrail2.ToString("F4");
                 result[$"RateTrail1_{rowIndex}"] = unit.RateTrail1 == 0 ? "" : unit.RateTrail1.ToString("F2") + "%";
