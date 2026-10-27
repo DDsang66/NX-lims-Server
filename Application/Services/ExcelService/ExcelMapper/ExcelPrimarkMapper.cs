@@ -336,7 +336,7 @@ namespace NX_lims_Softlines_Command_System.Application.Services.ExcelService.Exc
             List<string>? stringMap = null;
             switch (standard)
             {
-                case "EN 71-1:2024+A1:2018":
+                case "EN 71-1:2026":
                     stringMap = new List<string> { "A5" };
                     break;
                 case "16 CFR 1500.51-53":
