@@ -56,7 +56,7 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
             "AATCC TM20-2021 AATCC TM20A-2025 (Korea)",
             "CAN/CGSB-4.2 No.14-2005",
             "CNS 2339-1:2013 CNS 2339-2:2013",
-            "JIS L1030-1:2012 JIS L1030-2:2012",
+            "JIS L 1030-1:2024 JIS L 1030-2-1:2024 JIS L 1030-2-2:2024 JIS L 1030-2-3:2024 JIS L 1030-2-4:2024 JIS L 1030-2-5:2024 JIS L 1030-2-6:2024",
             "AS 2001.7-2005  AS/NZS 2622:1996",
         };
 
@@ -70,7 +70,7 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         /// **只换值、不补空格**：Korea 那条本来就是单空格，与双空格那条是两个不同的串，
         /// 别顺手统一。</item>
         /// <item><b>删除</b> —— CAN / CNS / JIS 三族整族不进（xlsx 里 CNAS 列写「无CNAS能力」）。
-        /// JIS 2012 → 2024 的版本问题因此不存在。</item>
+        /// 故 2C 侧的 JIS 不存在版本回退问题。</item>
         /// </list>
         ///
         /// ⚠️ 前端切模式时**必须先按值重映射、再滤掉不在新清单里的** —— 那两条换值的串

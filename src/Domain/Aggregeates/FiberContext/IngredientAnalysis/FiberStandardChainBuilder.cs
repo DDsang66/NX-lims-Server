@@ -216,12 +216,11 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         };
 
         // ── 2C 表：只列与常规**不同**的分部，其余转回常规表 ──────────────────────
-        // 依据 `成分标准终.xlsx` 各表的 CNAS / CMA 列：两列打架取旧的，写着 `/` 的一律落空。
+        // 依据 `成分标准终.xlsx`（2026-10-26 版）各表的 CNAS / CMA 列：两列打架取旧的，写着 `/` 的一律落空。
 
-        /// <summary>`-4` 的 CNAS 2023 / CMA **2017** → 取旧的；`-22` 两列都写 `/`。</summary>
+        /// <summary>`-4` 的 CNAS / CMA 都是 2023，与常规同值；只有 `-22` 两列都写 `/`。</summary>
         private static string IsoPartOfDual(int part) => part switch
         {
-            4 => "ISO1833-4:2017",
             22 => string.Empty,
             _ => IsoPartOf(part),
         };
@@ -252,15 +251,12 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         };
 
         /// <summary>
-        /// `-4` / `-11` / `-12` 的 CMA 落后到 2009（CNAS 分别是 2022 / 2024 / 2023，取旧的）；
+        /// `-4` / `-11` / `-12` 的 CNAS / CMA 已与常规同值（2022 / 2024 / 2023），不再回退；
         /// `-7` 的 CNAS / CMA **都是 2009**；`-22` 两列都写 `/`。分隔符仍是 `–`(U+2013)，只换年份。
         /// </summary>
         private static string GbPartOfDual(int part) => part switch
         {
-            4 => "GB/T 2910.4–2009",
             7 => "GB/T 2910.7–2009",
-            11 => "GB/T 2910.11–2009",
-            12 => "GB/T 2910.12–2009",
             22 => string.Empty,
             _ => GbPartOf(part),
         };

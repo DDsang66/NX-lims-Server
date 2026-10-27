@@ -73,6 +73,35 @@
         public bool MoistureRegainKnown { get; init; }
 
         public decimal Rate { get; init; }
+
+        /// <summary>
+        /// 这一行是**纤维素父槽下插的展示子行** —— 父行那 100% 按子纤维占比切出来的一份。
+        ///
+        /// 它不是真实成分行：没有自己的称量值（<see cref="GSMTrail1"/> / <see cref="GSMTrail2"/> /
+        /// <see cref="RateTrail1"/> / <see cref="RateTrail2"/> / <see cref="Avg"/> /
+        /// <see cref="Correct"/> 全空），<see cref="Rate"/> 只是父行 Rate 按
+        /// <see cref="CellulosicSubFibers"/> 的占比切出来的，
+        /// **不参与** Rate 分母、不进结果表、不进成分数统计、不进称量瓶表。
+        /// 见 <c>IngredientAnalysisCalculation.AppendCellulosicSubRows</c>。
+        /// </summary>
+        public bool IsCellulosicSubRow { get; init; }
+
+        /// <summary>
+        /// 这一行是**复合纤维父行下插的展示子行**（<c>Bicomponent Fiber</c> /
+        /// <c>Biconstituent Fiber</c> 的两个组分子成分）—— 性质与
+        /// <see cref="IsCellulosicSubRow"/> 完全相同：称量列全空，<see cref="Rate"/> 只是父行
+        /// Rate 按 <see cref="BicomponentSubFibers"/> 拆干质量切出来的一份，
+        /// **不参与** Rate 分母、不进结果表、不进成分数统计、不进称量瓶表。
+        /// 见 <c>IngredientAnalysisCalculation.AppendBicomponentSubRows</c>。
+        /// </summary>
+        public bool IsBicomponentSubRow { get; init; }
+
+        /// <summary>
+        /// 是不是展示子行（两种父槽的任意一种）。所有「跳过 / 缩进」的点都判这一个，
+        /// 别再各判各的 —— 漏掉一种就会让结果表重复计数、称量瓶多算坩埚。
+        /// </summary>
+        public bool IsDisplaySubRow => IsCellulosicSubRow || IsBicomponentSubRow;
+
         public List<CellulosicSubFiber> CellulosicSubFibers { get; init; } = new();
         public List<BicomponentSubFiber> BicomponentSubFibers { get; init; } = new();
     }
