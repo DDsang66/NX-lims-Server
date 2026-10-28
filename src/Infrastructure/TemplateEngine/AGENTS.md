@@ -334,3 +334,4 @@ E 涉及 XML 结构改写，务必先补 §4.3 的模板契约测试与书签大
 | 基线 | 变更 |
 |---|---|
 | `bc627f0` | 文件由 `README.md` 更名为 `AGENTS.md`：避免与项目根 README 混淆，且复数形式可被主流 AI 编码工具自动发现并挂载为目录上下文。内容未变更（仅同步更新指向 `WordTemplateAdapter\AGENTS.md` 与 `DataSheetContext\AGENTS.md` 的引用）。 |
+| `ffa16de` | 登记 §3.5：`TestConditionCount` 的书签校验是单向的（只查「Count>0 但无签名」，不查「有签名但 Count=0」），建议发布时补反向告警。同次改造将合成器口径对齐到该字段（`TestConditionComposer.ComposeText` 在 `Count <= 0` 时返回空串）。 |

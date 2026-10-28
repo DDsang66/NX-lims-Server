@@ -273,10 +273,14 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.CheckListCont
 
 
         /// <summary>
-        /// 提取 CuttingMethod 并从 Parameter 中移除 SpecimenArea 和 SpecimenNum
+        /// 提取 CuttingMethod，并从 Parameter 中移除 SpecimenArea / SpecimenNum / Remark
         /// </summary>
         /// <param name="parameter">原始 Parameter JSON 字符串</param>
-        /// <returns>Item1: CuttingMethod字符串 (可能为null), Item2: 清理后的 Parameter JSON 字符串</returns>
+        /// <returns>
+        /// Item1: CuttingMethod 字符串（可能为 null）。每个测点组拼为
+        /// <c>SpecimenArea=…, SpecimenNum=…, Remark=…</c>（存在的字段才拼），多测点组以 <c>"; "</c> 连接；
+        /// Item2: 清理后的 Parameter JSON 字符串（上述三个键已从 values 中移除）。
+        /// </returns>
         private static (string? CuttingMethod, string? CleanedParameter) ProcessParameterCutting(string parameter)
         {
             if (string.IsNullOrWhiteSpace(parameter))
@@ -325,13 +329,29 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.CheckListCont
                             : num.ToString();
                     }
 
-                    if (!string.IsNullOrEmpty(specimenArea) || !string.IsNullOrEmpty(specimenNum))
+                    // Remark 同样属于「取样方法」的展示内容，一并提取到 CuttingMethod：
+                    // 它在参数里是自由文本（如 "Minimum 2.5 inches per 10 minutes"），
+                    // 直接展示在 testParam 里会让参数表变冗，剥离后参数只保留真正的测试参数。
+                    string? remark = null;
+                    if (values.TryGetProperty("Remark", out JsonElement remarkElement))
+                    {
+                        remark = remarkElement.ValueKind == JsonValueKind.String
+                            ? remarkElement.GetString()
+                            : remarkElement.ToString();
+                    }
+
+                    // 三个字段任一非空就成组，否则「只有 Remark、没有 Specimen」的测点组会被整段漏掉
+                    if (!string.IsNullOrEmpty(specimenArea)
+                        || !string.IsNullOrEmpty(specimenNum)
+                        || !string.IsNullOrEmpty(remark))
                     {
                         var groupParts = new List<string>();
                         if (!string.IsNullOrEmpty(specimenArea))
                             groupParts.Add($"SpecimenArea={specimenArea}");
                         if (!string.IsNullOrEmpty(specimenNum))
                             groupParts.Add($"SpecimenNum={specimenNum}");
+                        if (!string.IsNullOrEmpty(remark))
+                            groupParts.Add($"Remark={remark}");
 
                         parts.Add(string.Join(", ", groupParts));
                     }
@@ -340,8 +360,10 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service.CheckListCont
                     var newValuesDict = new Dictionary<string, JsonElement>();
                     foreach (var valProp in values.EnumerateObject())
                     {
-                        // 过滤掉 SpecimenArea 和 SpecimenNum
-                        if (valProp.NameEquals("SpecimenArea") || valProp.NameEquals("SpecimenNum"))
+                        // 过滤掉已提取到 CuttingMethod 的三个键，避免参数表重复展示
+                        if (valProp.NameEquals("SpecimenArea")
+                            || valProp.NameEquals("SpecimenNum")
+                            || valProp.NameEquals("Remark"))
                         {
                             continue;
                         }

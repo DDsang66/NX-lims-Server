@@ -3,7 +3,7 @@ using NX_lims_Softlines_Command_System.src.Domain.Aggregeates.TestItemContext.Va
 using NX_lims_Softlines_Command_System.src.Domain.Share.DependencyInject;
 using NX_lims_Softlines_Command_System.src.Domain.Share.Interface;
 
-namespace NX_lims_Softlines_Command_System.src.Domain.Contract
+namespace NX_lims_Softlines_Command_System.src.Domain.Contract.Repository
 {
     public interface ITestItemRepository:IScopedDependency,IRepository<TestItem,TestItemId,string>
     {

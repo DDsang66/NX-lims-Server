@@ -46,10 +46,11 @@ flowchart LR
 | `DataSheetModelGenerator.cs` | 433 | 领域编排 | `IScopedDependency` | **模型工厂**：CheckList → 参数分包 → 选模板 → `DataSheetModel` |
 | `DataSheetQueryService.cs` | 43 | 查询服务 | `IScopedDependency` | 按 CheckListId 查 DataSheet 列表（Mapster 映射为 DTO） |
 | `DataSheetProgressService.cs` | 123 | 查询服务 | `IScopedDependency` | 汇总进度快照（`IDistributedCache`，TTL 0.5s） |
-| `DataSheetProgressHub.cs` | 110 | 推送枢纽 | **`ISingletonDependency`** | SSE 连接注册表 + 快照哈希去重 + 广播 |
-| `DataSheetProgressPollingService.cs` | 83 | 后台任务 | `BackgroundService` | 定时取快照，变化才经 Hub 推给前端 |
+| `DataSheetProgressHub.cs` | 45 | 推送薄壳 | **`ISingletonDependency`** | 转发到通用 `ISseHub`（频道 `datasheet`），仅保留 `Guid` ↔ `string key` 转换 |
+| `DataSheetProgressSnapshotProvider.cs` | 约 175 | 快照提供者 | **`ISingletonDependency`** | DataSheet 链路接入通用推送的**唯一适配点**：取快照 + 算哈希 + 终态判定 |
+| `DataSheetProgressPollingService.cs` | 约 30 | **已停用** | — | 轮询已移交 `Application\Service\Realtime\ProgressPollingService`，本类仅留空壳与迁移线索 |
 
-> 注意：只有 `DataSheetProgressHub` 是 **Singleton**（必须持有所有 SSE 连接），
+> 注意：`DataSheetProgressHub` 与 `DataSheetProgressSnapshotProvider` 是 **Singleton**，
 > 其余都是 Scoped。Worker 因此必须靠 `IServiceScopeFactory` 自建 scope。
 
 ---
@@ -339,50 +340,68 @@ IsAppend = sampleDataCount > 0 && samplemap.Length > sampleDataCount   // 严格
 
 ---
 
-### 2.6 `DataSheetProgressHub`（Singleton）
+### 2.6 `DataSheetProgressHub`（Singleton，**迁移期兼容薄壳**）
 
-**字段**：
+> 推送逻辑已泛化到 `src\Application\Service\Realtime\`，本类不再持有连接表，也不再算哈希。
+> 保留它只为让 `DataSheetController` 的调用形态稳定，避免一次性改动过大。
 
-- `ConcurrentDictionary<Guid, ConcurrentBag<SseEmitter>> _emitters` —— 每个 CheckList 挂多个 SSE 客户端
-- `ConcurrentDictionary<Guid, string> _lastSnapshotHash` —— **每 CheckList 上次广播的快照哈希**
+**依赖**：`ISseHub`（通用推送枢纽）
 
 | 方法 | 入参 | 出参 | 说明 |
 |---|---|---|---|
-| `Register` | `Guid checkListId`、`SseEmitter emitter` | `void` | 建连登记 |
-| `Unregister` | `Guid checkListId`、`SseEmitter emitter` | `void` | 断连摘除 |
-| `GetActiveCheckListIds` | — | `IReadOnlyCollection<Guid>` | 有活跃连接的所有 CheckList |
-| `HasChanged` | `Guid checkListId`、`DataSheetProgressDto snapshot` | `bool` | **哈希去重**：与上次相同则 false |
-| `Broadcast` | `Guid checkListId`、`string eventName`、`object payload` | `Task` | 推给该 CheckList 所有连接 |
-| `CloseAll` | `Guid checkListId` | `void` | 关闭全部连接 |
-| `ComputeHash` | `DataSheetProgressDto dto` | `string` | 快照 → 哈希 |
+| `RegisterAsync` | `Guid checkListId`、`ISseClient client`、`CancellationToken ct` | `Task` | 转发 `ISseHub.RegisterAsync("datasheet", key, client, ct)` |
+| `UnregisterAsync` | `Guid checkListId`、`ISseClient client` | `Task` | 转发 `ISseHub.UnregisterAsync` |
+| `GetActiveCheckListIds` | — | `IReadOnlyCollection<Guid>` | 转发 `ISseHub.GetActiveKeys("datasheet")` 并解析回 Guid；诊断用途 |
 
-**去重机制**是关键：`HasChanged` + `_lastSnapshotHash` 保证
-「数据没变就不推」，避免轮询周期性地往 SSE 里灌重复消息。
+**原职责去向**（不要再往本类里加回来）：
 
-`ComputeHash`（L98-107）的输入是：`Status|Success|Failed|Generating|Pending|MergedPdfUrl`
-再拼接每项的 `{DataSheetId}:{Status}:{UpdatedAt.Ticks}`，SHA256 后转十六进制。
-因此**任何一项的 `UpdateTime` 变化都会触发推送**，即使状态没变。
+| 原成员 | 现在在哪 |
+|---|---|
+| `_emitters` / `_lastSnapshotHash` / `Dead` 清理 | `SseHub`（`Application\Service\Realtime`） |
+| `ComputeHash`（硬编码 DataSheet 字段） | `DataSheetProgressSnapshotProvider.ComputeHash`（逐字复刻原口径） |
+| `HasChanged` / `Broadcast` / `CloseAll` | 由 `ProgressPollingService` 直接调 `ISseHub`，本类已删除这三个方法 |
+
+> ⚠️ 连接表与哈希去重已不是本类维护。看推送行为请去 `Application\Service\Realtime\AGENTS.md`。
 
 ---
 
-### 2.7 `DataSheetProgressPollingService`
+### 2.7 `DataSheetProgressSnapshotProvider`（Singleton，**链路唯一适配点**）
 
-**依赖**：`IServiceScopeFactory`、`DataSheetProgressHub`、`ILogger`
+实现 `IProgressSnapshotProvider`（契约在 `src\Application\Contract\Realtime\`），频道固定 `"datasheet"`。
 
-| 方法 | 入参 | 出参 | 说明 |
+**依赖**：`ISseHub`、`IServiceScopeFactory`、`ILogger<DataSheetProgressSnapshotProvider>`
+
+> 本类无状态，却需要 Scoped 的 `DataSheetProgressService`，所以每次取快照时
+> **自建 scope**，避免 captive dependency。
+
+| 方法 | 入参 | 出参 | 行为 |
 |---|---|---|---|
-| `ExecuteAsync` | `CancellationToken ct` | `Task` | 定时循环 |
-| `IsCompleted` | `DataSheetProgressDto dto` | `bool` | 整体完成判定 |
+| `GetActiveKeysAsync` | `CancellationToken ct` | `Task<IReadOnlyCollection<string>>` | 直接返回 `ISseHub.GetActiveKeys("datasheet")`——天然满足「无订阅返回空」 |
+| `GetSnapshotAsync` | `string key`、`CancellationToken ct` | `Task<ProgressSnapshot>` | key 解析为 Guid → 建 scope 取 `DataSheetProgressService.GetSnapshot` → 包装为 `ProgressSnapshot`；**`Payload` 直接放 `DataSheetProgressDto` 实例**（前端 JSON 零变更） |
+| `IsCompleted` | `ProgressSnapshot snapshot` | `bool` | 复刻原 L74-80：`Total > 0` 且 `Status ∈ {SUCCESS, FAILED, PARTIAL_FAILED}` |
+| `ComputeHash` | `ProgressSnapshot snapshot` | `string` | **逐字复刻**原 `DataSheetProgressHub.ComputeHash`（`Status|Success|Failed|Generating|Pending|MergedPdfUrl` + 每项 `{DataSheetId}:{Status}:{UpdatedAt.Ticks}` → SHA256 → hex） |
 
-工作方式：`GetActiveCheckListIds()` 取当前有人订阅的 CheckList →
-自建 scope 取 `DataSheetProgressService.GetSnapshot` → `hub.HasChanged` 判定 → 变了才 `Broadcast`。
-循环周期 **1 秒**（L65）。
+**哈希必须逐字复刻的原因**：字段顺序、分隔符、`Ticks` 精度任一改变，迁移后首次推送就会算出"新"哈希而多推一次。
+功能无损，但属行为变更，会让「迁移前后推送次数」不可比。
 
-推送两类事件（L50、L55）：
-- `"progress"`：快照有变化时推；
-- `"completed"`：`IsCompleted(dto)` 为真时先补推一次，再 `CloseAll` 收尾。
+**key 非法时的行为**：返回 `Status` 为空的快照而非抛异常，让轮询循环能继续处理同频道其它 key。
 
-`IsCompleted`（L74-80）判定为 `Total > 0` 且 `Status ∈ {SUCCESS, FAILED, PARTIAL_FAILED}`。
+---
+
+### 2.8 `DataSheetProgressPollingService` —— **已停用**
+
+轮询职责移交通用 `ProgressPollingService`（`Application\Service\Realtime`）：
+后者通过 `IEnumerable<IProgressSnapshotProvider>` 自动纳入本目录的 `DataSheetProgressSnapshotProvider`。
+
+- `Program.cs` 已改为注册 `ProgressPollingService`，**原类不再注册为 HostedService**；
+- 保留空壳仅为让搜索原类名时能找到迁移线索，后续清理可直接删除该文件；
+- ⚠️ 若误把它重新注册回来，会与通用轮询**双跑**，导致重复推送与哈希竞争。
+
+**通用轮询的行为**（与原实现一致，含一处修正）：1 秒一轮；只取有活跃订阅的 key；哈希不变不推；终态推 `completed` 后 `CloseAll`。
+
+> **一处行为修正**：`SseHub.UnregisterAsync` 在最后一个连接移除时**一并摘除该 key**，
+> 而原实现保留空 Bag 导致 `GetActiveCheckListIds` 仍返回它、继续为无人订阅的 key 查快照。
+> 修正后只会**减少**无用查询，不会漏推。
 
 > 为什么不让 Worker 直接推送？**解耦**：Worker 只管生成落库，推送归进度服务，
 > 且「只推活跃订阅者」能省掉大量无意义查询。
@@ -600,5 +619,6 @@ DataSheetFillingEngine.FillDataSheet(model) → string fileUrl
 | `bc627f0` | **公共组件抽取**：把「运行条件组装 / 模板索引匹配 / 文本模板填充」三段从 `GenerateAsync` 内联代码下沉到 `ITestConditionComposer`（`src\Application\Service\TemplateConditionContext`），与 checklist 侧共用同一实现。本类依赖由 `IStandardRepository` + `ITemplateSelectService` + `IDataSheetModelDomainService` 减为 `ITestConditionComposer` + `IDataSheetModelDomainService`；`TestMethod` 改从 `composition.RuntimeConditions` 复用，不再自行查标准库。**对外接口 `IDataSheetModelGenerator` 签名未变**，Worker 调用点零改动。 |
 | `bc627f0` | 清理死注入：`DataSheetService` 删除未使用的 `IDataSheetModelGenerator`（字段 / 构造参数 / 赋值三处），依赖从 10 个降为 9 个；§2.1 同步。§6.5（ONLYOFFICE 回调幂等）依据原有注释保留为待办，本次不动。 |
 | `bc627f0` | 文件由 `README.md` 更名为 `AGENTS.md`：避免与项目根 README 混淆，且复数形式可被主流 AI 编码工具自动发现并挂载为目录上下文。内容未变更。 |
+| `bc627f0` | **SSE 通用化迁移（M1）**：`DataSheetProgressHub` 改为兼容薄壳——转发 `ISseHub`，仅留 `Guid` ↔ `string key` 转换，删除 `HasChanged` / `Broadcast` / `CloseAll` / `ComputeHash`；新增 `DataSheetProgressSnapshotProvider`（实现 `IProgressSnapshotProvider`，频道 `datasheet`，哈希与终态判定**逐字复刻**原口径）；`DataSheetProgressPollingService` 停用（`Program.cs` 改注册通用 `ProgressPollingService`，避免双轮询）。`DataSheetController.StreamProgress` 改用 `SseResponseConfigurator` + `HttpResponseSseClient` 并去掉无用 Using（`SignalR`、`Domain.Contract.Util`），**URL / 事件名 / payload 结构零变更**。 |
 
 > 维护约定：每次改动本目录代码，请同步更新对应小节与上表；行号以被改文件的当前版本为准。

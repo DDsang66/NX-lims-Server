@@ -76,6 +76,7 @@ public sealed class BookmarkMapResult
 | `bc627f0` | 新建本 README；新增 `WashDataKind.cs`、`BookmarkMapResult.cs` |
 | `bc627f0` | `BookmarkMapResult.IsAppend` 注释按真实实现修正为「容量 > 0 且展开个数**严格大于**容量」（原写「大于或等于」是过期口径）。`WashDataKind` 经实测确认**会影响写入值**（Sample 写测点 ID、AfterWash 写水洗次数），非仅文档口径。 |
 | `bc627f0` | 文件由 `README.md` 更名为 `AGENTS.md`：避免与项目根 README 混淆，且复数形式可被主流 AI 编码工具自动发现并挂载为目录上下文。内容未变更。 |
+| `bc627f0` | **删除 `SseEmitter.cs`，清除分层违规**：该类持有 `HttpResponse`（ASP.NET Core 类型）却位于 Domain 层，使领域层被 Web 框架绑架。已由 `src\Infrastructure\Realtime\Sse\ISseClient` / `HttpResponseSseClient` 替代（顺带把空实现的 `Complete()` 改为 `CompleteAsync`，并补 `data:` 多行拆分）。删除前全库 grep 确认生产代码**零引用**，仅剩说明性引用（迁移来源注释）。 |
 
 ---
 

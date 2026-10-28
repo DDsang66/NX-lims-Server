@@ -84,7 +84,10 @@ namespace NX_lims_Softlines_Command_System
             () => sp.GetRequiredService<IConditionPatternBuilder>());
 
             builder.Services.AddHostedService<DataSheetGenerateWorker>();
-            builder.Services.AddHostedService<DataSheetProgressPollingService>();
+            // 进度推送改为通用轮询：它通过 IEnumerable<IProgressSnapshotProvider> 自动纳入各业务链路
+            // （含 DataSheetProgressSnapshotProvider），原 DataSheetProgressPollingService 已停用，
+            // 不要再把它注册回来，否则会出现双轮询导致重复推送。
+            builder.Services.AddHostedService<NX_lims_Softlines_Command_System.src.Application.Service.Realtime.ProgressPollingService>();
             builder.Services.AddDistributedMemoryCache(); // 开发用，生产换 Redis
 
 

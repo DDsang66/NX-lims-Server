@@ -13,6 +13,7 @@
 | 根目录 | `IFileSecurityValidator.cs`、`ITemplateIdGenerator.cs`、`ITemplateQueryService.cs`、`ITemplateValidator.cs`、`IWorkdayCalculator.cs` |
 | `Engine/` | 引擎族接口（含 `Engine/Condition/IConditionPoolDomainService` 等） |
 | `DataSheetContext/` | `IDataSheetModelDomainService.cs`（本次新增） |
+| `StandardContext/` | `IStandardMethodCodeResolver.cs`（本次新增）：标准号 → 方法级键归一化契约 |
 
 ---
 
@@ -37,6 +38,17 @@
 | `ExpandByWashCycle(CheckListItem, TestPointPackage, WashDataKind)` | 按洗涤次数展开 |
 | `BuildBookmarkMap(CheckListItem, TestPointPackage, Template, string[], WashDataKind)` | 书签映射 + `IsAppend` 判定 |
 
+### `IStandardMethodCodeResolver`（`StandardContext/`）
+
+| 成员 | 作用 |
+|---|---|
+| `string? Resolve(string? standardCode)` | 把具体标准号归一化为方法级键（`ISO 12945-2` / `GB/T 12945-2` / `AATCC 124`）；无数字编号时返回 null，**不抛异常** |
+
+设计要点：
+- 粒度落在**方法**级（保留 `-1`/`-2`），**不是标准族**——族是 `ISO 12945`，会把方法一（ICI 起球）与方法二（Martindale 起球）合并，反而破坏模板索引唯一性。
+- 实现是零依赖纯函数（不注入仓储），可被任意层复用。
+- 解析规则是启发式且**不完备**，跨体系等价（`AATCC 124` ↔ `ISO 7768`）不自动归并，需人工映射。
+
 实现：`src\Domain\Services\DataSheetContext\DataSheetModelDomainService.cs`（零仓储依赖）。
 
 ---
@@ -59,6 +71,7 @@
 | `bc627f0` | 新建本 README；新增 `DataSheetContext\IDataSheetModelDomainService.cs`（数据单模型领域规则契约，4 个方法） |
 | `bc627f0` | 契约经实测稳定：实现类 `DataSheetModelDomainService` 按该契约落地，应用层 `DataSheetModelGenerator` 依赖此接口完成委托。`IDataSheetModelGenerator`（Application 层）**未改动**，仍只暴露 `GenerateAsync`。 |
 | `bc627f0` | 文件由 `README.md` 更名为 `AGENTS.md`：避免与项目根 README 混淆，且复数形式可被主流 AI 编码工具自动发现并挂载为目录上下文。内容未变更。 |
+| `ffa16de` | 新增 `StandardContext\IStandardMethodCodeResolver.cs`：标准号 → 方法级键归一化契约，供模板索引按测试方法匹配。实现在 `Domain\Services\StandardContext`（零依赖纯函数）。 |
 
 ---
 

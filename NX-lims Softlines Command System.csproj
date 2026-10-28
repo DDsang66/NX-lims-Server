@@ -20,6 +20,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="src\Domain\Contract\Util\SseEmitter.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="src\Application\Contract\Realtime\IProgressSnapshotProvider.cs.tmp" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="AutoMapper" Version="16.1.1" />
     <PackageReference Include="AutoMapper.Extensions.Microsoft.DependencyInjection" Version="12.0.1" />
     <PackageReference Include="ClosedXML" Version="0.105.0" />

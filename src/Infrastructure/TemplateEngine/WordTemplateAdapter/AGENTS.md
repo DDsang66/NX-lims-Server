@@ -93,6 +93,13 @@ Engine 自己 WordprocessingDocument.Open → 按行列坐标 SetCellText → Sa
 - **布局常量**：`ChecklistLayout`（L387-398）
   - `MainTableMarker = "CheckListTable"`、`BarcodeTableMarker = "Barcode"`
   - `BarcodeRow = 4` / `BarcodeCol = 4`、`ReportNoRow = 0` / `ReportNoCol = 1`
+- **Test Param 列（第 4 列，0-based index=3）的渲染规则**
+  - 文本由 `ITestConditionComposer.ComposeForItemAsync` 生成：形态为 `[测点组]:` + 换行 + 条件文本，
+    **段与段之间空一行**（`\r\n\r\n`，末尾不留）；**无参数的测点组整段不输出**，全部无参数时整格留白。
+  - Adapter 侧只做拆行渲染：`SetCellText`（L143-194）按 `\r\n` / `\n` / `\v` 拆分，
+    每行 1 个 Run + 1 个仅含 `<w:br/>` 的 Break Run，**全部写入单元格第一个段落**；字体 Arial 9pt（`FontSize Val="18"`，半磅制）。
+  - 因此「空行」完全依赖输入文本里的连续换行，Adapter 不做任何排版补偿。
+    **想调整段落间距应改 Composer 的输出格式，不要在 Adapter 里加空 Run。**
 
 ---
 
@@ -665,3 +672,4 @@ $$\text{新块第 } k \text{ 块第 } c \text{ 列编号} = A + (k-1)\cdot\text{
 | 基线 | 变更 |
 |---|---|
 | `bc627f0` | 文件由 `README.md` 更名为 `AGENTS.md`：避免与项目根 README 混淆，且复数形式可被主流 AI 编码工具自动发现并挂载为目录上下文。内容未变更。 |
+| `ffa16de` | §3.2 补「Test Param 列的渲染规则」：该列文本由 `ComposeForItemAsync` 生成（段间空行、无参数段整段跳过），Adapter 只做拆行渲染、不做排版补偿；并记录「调段落间距应改 Composer，不要在 Adapter 加空 Run」这条边界。 |

@@ -32,16 +32,20 @@ checklist docx 的生成编排。业务规则不写在这里——纯计算在�
 | 方法 | 入参 | 返回 | 说明 |
 |---|---|---|---|
 | `CalculateParamAsync` | `Guid id`、`CancellationToken ct` | `Task<Result>` | 查条件池 → 按测点找池 → `GenerateForCheckListItemAsync` 得 `ParamSet` → `UpdateItemParameters` 落库 |
-| `GetCheckListAsync` | `Guid checkListId`、`CancellationToken ct` | `Task<Result<CheckListResponseDto>>` | 供前端展示；内部用 `ProcessParameterCutting` 剥离 `SpecimenArea`/`SpecimenNum` 并回填 `CuttingMethod` |
+| `GetCheckListAsync` | `Guid checkListId`、`CancellationToken ct` | `Task<Result<CheckListResponseDto>>` | 供前端展示；内部用 `ProcessParameterCutting` 剥离 `SpecimenArea`/`SpecimenNum`/`Remark` 并回填 `CuttingMethod` |
 | `GenerateCheckListAsync` | `CheckListGenerateDto dto`、`CancellationToken ct` | `Task<Result<DocxUrlResponseDto>>` | 生成 checklist docx；在调 Adapter 前先调 `ICheckListTestParamResolver` 补齐 testParam，失败则结构化日志 + 阻断 |
 
 **依赖注入（8 个）**：`IUnitOfWork`、`ICheckListRepository`、`CheckListAdapter`、
 `IFileStorageService`、`IConditionPoolRepository`、`IParamGenerationUseCaseService`、
 `ICheckListTestParamResolver`、`ILogger<CheckListAppService>`。
 
-> ⚠️ `ProcessParameterCutting` 会**移除** `SpecimenArea` / `SpecimenNum`，它只服务于
+> ⚠️ `ProcessParameterCutting` 会**移除** `SpecimenArea` / `SpecimenNum` / `Remark`，它只服务于
 > `GetCheckListAsync` 的展示链路。**checklist docx 生成链路不经过它**，直接从聚合与条件池计算——
 > 两条链路不要混用，否则会出现「先剔字段再算条件」导致的文本缺项（静默错误）。
+>
+> 提取后 `CuttingMethod` 的形态：每个测点组拼为 `SpecimenArea=…, SpecimenNum=…, Remark=…`
+> （只拼存在的字段，顺序固定），多测点组以 `"; "` 连接；三个字段任一非空即成组，
+> 因此「只有 Remark 没有 Specimen」的测点组也不会被漏掉。
 
 ---
 
@@ -146,6 +150,7 @@ checklist docx 的生成编排。业务规则不写在这里——纯计算在�
 | `bc627f0` | **对齐 bug 修复**：原按 `dto.TestItem == TestItemId.Value` 精确匹配，但前端回传的是展示名称，导致必现失败。改为三级降级：ID 精确 → 名称包含（`NameEn`/`NameChn`，含反向包含）→ `Samples` 集合消歧；均失败抛 `TC007`（禁止位置盲配）。名称字典按需惰性加载（全部按 ID 命中时不查库）。 |
 | `bc627f0` | **CuttingMethod 去重生效**：原实现只按换行拆（而实际数据是 `; ` 分隔），导致相同值重复三遍；改为按行 + `;` 双拆后去重，并按原形态回拼。 |
 | `bc627f0` | 文件由 `README.md` 更名为 `AGENTS.md`：避免与项目根 README 混淆，且复数形式可被主流 AI 编码工具自动发现并挂载为目录上下文。内容未变更。 |
+| `ffa16de` | `ProcessParameterCutting` 新增提取 `Remark`：从 `Parameter` 的 `values` 中读出、以 `Remark=xxx` 追加进 `CuttingMethod`（组内顺序 `SpecimenArea → SpecimenNum → Remark`，多测点组以 `"; "` 连接），并从 `Parameter` 中移除该键；成组判空条件同步扩展为三字段任一非空。仅作用于 `GetCheckListAsync` 展示链路。 |
 
 ---
 
@@ -156,6 +161,9 @@ checklist docx 的生成编排。业务规则不写在这里——纯计算在�
 2. **对齐策略可配置**：目前固定按 `TestItem` 对齐；若前端允许追加自定义行，需重新定义这些行的 testParam 取值规则。
 3. **CuttingMethod 去重已支持 `; ` 与换行两种分隔**（原为待办，已完成）；若前端改用其它分隔符（如逗号），需同步扩展。
 4. **时序校验前移**：若希望更早暴露「参数未计算」问题，可把校验前移到 Controller 或过滤器层。
+5. **`ProcessParameterCutting` 残留 `Console.WriteLine`**：`catch (JsonException)` 分支里用的是
+   `Console.WriteLine`（`CheckListAppService.cs` 内），与项目「统一 `ILogger`」的约定不一致。
+   登记待办，本次未改。
 
 ---
 

@@ -32,6 +32,7 @@
 | `Compensation/` | `ParamCompensationService.cs` |
 | `Validate/` | `ConditionPoolValidateService.cs`、`FileSecurityValidator.cs`、`FormulaValidateService.cs`、`ParamRuleValidateService.cs`、`ParamStructureValidateService.cs`、`ParamValidateService.cs` |
 | `DataSheetContext/` | `DataSheetModelDomainService.cs`（新增，见该目录 README） |
+| `StandardContext/` | `StandardMethodCodeResolver.cs`（新增，见该目录 AGENTS.md）：标准号 → 方法级键的归一化，零依赖纯函数 |
 
 ---
 
@@ -74,6 +75,7 @@
 | `bc627f0` | 新建本 README；新增 `DataSheetContext\DataSheetModelDomainService.cs`（数据单模型领域规则下沉，零仓储依赖） |
 | `bc627f0` | 数据单领域化重构完成：4 个方法（分包 / 数据区计数 / 水洗展开 / 书签映射）全部实现在领域层，应用层改为薄壳委托。静态核对确认本服务**无 Repository / Infrastructure / ILogger 依赖**（代码确证：`grep Repository\|Infrastructure\|ILogger` 仅命中 XML 注释）。 |
 | `bc627f0` | 文件由 `README.md` 更名为 `AGENTS.md`：避免与项目根 README 混淆，且复数形式可被主流 AI 编码工具自动发现并挂载为目录上下文。内容未变更。 |
+| `ffa16de` | 新增 `StandardContext\StandardMethodCodeResolver.cs`：标准号 → 方法级键（如 `BS EN ISO 12945-2:2010` → `ISO 12945-2`）归一化，供模板索引按「测试方法」而非「具体标准号」匹配。**零依赖纯函数**（不注入仓储）；解析失败返回 null 不抛异常。选择理由与「为何不用标准族」见该目录 AGENTS.md。 |
 
 ---
 

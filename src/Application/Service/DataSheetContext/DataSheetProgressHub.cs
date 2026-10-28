@@ -1,109 +1,65 @@
-﻿using NX_lims_Softlines_Command_System.src.Application.Contract.DTOs.DataSheetConetxt;
-using NX_lims_Softlines_Command_System.src.Domain.Contract.Util;
+﻿using NX_lims_Softlines_Command_System.src.Application.Service.Realtime;
 using NX_lims_Softlines_Command_System.src.Domain.Share.DependencyInject;
-using System.Collections.Concurrent;
+using NX_lims_Softlines_Command_System.src.Infrastructure.Realtime.Sse;
 
 namespace NX_lims_Softlines_Command_System.src.Application.Service.DataSheetContext
 {
-    public class DataSheetProgressHub:ISingletonDependency
+    /// <summary>
+    /// 【迁移期兼容薄壳】DataSheet 链路的推送入口。
+    ///
+    /// 实际推送逻辑已移交通用 <see cref="ISseHub"/>（频道固定 <c>"datasheet"</c>），
+    /// 本类只保留 <c>Guid checkListId</c> ↔ <c>string key</c> 的转换，
+    /// 使 <c>DataSheetController</c> 的调用形态保持稳定。
+    ///
+    /// 原类内部持有的以下职责已迁出，不要再往本类里加回来：
+    /// · 连接表与 dead 清理 → <see cref="ISseHub"/>；
+    /// · 快照哈希计算（原硬编码 DataSheet 字段）→ <see cref="DataSheetProgressSnapshotProvider"/>；
+    /// · 每秒轮询派发 → <see cref="ProgressPollingService"/>。
+    ///
+    /// 后续若所有调用方都改为直接使用 <see cref="ISseHub"/>，本类可整体删除。
+    /// </summary>
+    public class DataSheetProgressHub : ISingletonDependency
     {
-        private readonly ConcurrentDictionary<Guid, ConcurrentBag<SseEmitter>> _emitters = new();
-        private readonly ConcurrentDictionary<Guid, string> _lastSnapshotHash = new();
+        /// <summary>DataSheet 链路的频道名，必须与 Provider 中的 Channel 保持一致。</summary>
+        private const string Channel = "datasheet";
+
+        private readonly ISseHub _sseHub;
 
         /// <summary>
-        /// 注册监听
+        /// 构造兼容薄壳。
         /// </summary>
-        /// <param name="checkListId"></param>
-        /// <param name="emitter"></param>
-        public void Register(Guid checkListId, SseEmitter emitter)
+        /// <param name="sseHub">通用推送枢纽。</param>
+        /// <exception cref="ArgumentNullException">sseHub 为 null。</exception>
+        public DataSheetProgressHub(ISseHub sseHub)
         {
-            var bag = _emitters.GetOrAdd(checkListId, _ => new ConcurrentBag<SseEmitter>());
-            bag.Add(emitter);
+            _sseHub = sseHub ?? throw new ArgumentNullException(nameof(sseHub));
         }
 
         /// <summary>
-        /// 取消监听
+        /// 注册一个清单的进度监听连接。
         /// </summary>
-        /// <param name="checkListId"></param>
-        /// <param name="emitter"></param>
-        public void Unregister(Guid checkListId, SseEmitter emitter)
-        {
-            if (!_emitters.TryGetValue(checkListId, out var bag)) return;
-            var newBag = new ConcurrentBag<SseEmitter>(bag.Where(e => !ReferenceEquals(e, emitter)));
-            _emitters[checkListId] = newBag;
-        }
+        /// <param name="checkListId">清单 ID。</param>
+        /// <param name="client">SSE 连接。</param>
+        /// <param name="ct">取消令牌。</param>
+        public Task RegisterAsync(Guid checkListId, ISseClient client, CancellationToken ct = default)
+            => _sseHub.RegisterAsync(Channel, checkListId.ToString(), client, ct);
 
         /// <summary>
-        /// 获取所有激活的清单id
+        /// 取消注册。
         /// </summary>
-        /// <returns></returns>
+        /// <param name="checkListId">清单 ID。</param>
+        /// <param name="client">要移除的连接。</param>
+        public Task UnregisterAsync(Guid checkListId, ISseClient client)
+            => _sseHub.UnregisterAsync(Channel, checkListId.ToString(), client);
+
+        /// <summary>
+        /// 取当前有活跃订阅的清单 ID 集合（诊断用途）。
+        /// </summary>
+        /// <returns>活跃清单 ID 列表；无订阅时为空集合。</returns>
         public IReadOnlyCollection<Guid> GetActiveCheckListIds()
-            => _emitters.Keys.ToList();
-
-        /// <summary>
-        /// 判断是否发生变化
-        /// </summary>
-        /// <param name="checkListId"></param>
-        /// <param name="snapshot"></param>
-        /// <returns></returns>
-        public bool HasChanged(Guid checkListId, DataSheetProgressDto snapshot)
-        {
-            var hash = ComputeHash(snapshot);
-            var last = _lastSnapshotHash.GetOrAdd(checkListId, _ => "");
-            if (last == hash) return false;
-            _lastSnapshotHash[checkListId] = hash;
-            return true;
-        }
-
-        /// <summary>
-        /// 广播
-        /// </summary>
-        /// <param name="checkListId"></param>
-        /// <param name="eventName"></param>
-        /// <param name="payload"></param>
-        /// <returns></returns>
-        public async Task Broadcast(Guid checkListId, string eventName, object payload)
-        {
-            if (!_emitters.TryGetValue(checkListId, out var bag)) return;
-            var dead = new List<SseEmitter>();
-            foreach (var emitter in bag)
-            {
-                try { await emitter.SendAsync(eventName, payload); }
-                catch { dead.Add(emitter); }
-            }
-            foreach (var d in dead) Unregister(checkListId, d);
-        }
-
-        /// <summary>
-        /// 关闭所有监听
-        /// </summary>
-        /// <param name="checkListId"></param>
-        public void CloseAll(Guid checkListId)
-        {
-            if (_emitters.TryRemove(checkListId, out var bag))
-            {
-                foreach (var e in bag)
-                {
-                    try { e.Complete(); } catch { }
-                }
-            }
-            _lastSnapshotHash.TryRemove(checkListId, out _);
-        }
-
-        /// <summary>
-        /// 计算hash
-        /// </summary>
-        /// <param name="dto"></param>
-        /// <returns></returns>
-        private static string ComputeHash(DataSheetProgressDto dto)
-        {
-            var raw = $"{dto.Status}|{dto.Success}|{dto.Failed}|{dto.Generating}|{dto.Pending}|{dto.MergedPdfUrl}|" +
-                      string.Join(",", dto.Items.Select(i => $"{i.DataSheetId}:{i.Status}:{i.UpdatedAt.Ticks}"));
-
-            var bytes = System.Security.Cryptography.SHA256.HashData(
-                System.Text.Encoding.UTF8.GetBytes(raw));
-
-            return Convert.ToHexString(bytes);
-        }
+            => _sseHub.GetActiveKeys(Channel)
+                     .Select(k => Guid.TryParse(k, out var id) ? id : Guid.Empty)
+                     .Where(id => id != Guid.Empty)
+                     .ToList();
     }
 }
