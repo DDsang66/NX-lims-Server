@@ -128,12 +128,13 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
             // （8.50 → 8.5、4.00 → 4.0），有值才印两位（5.75）—— 见 FormatFooterMoistureRegain。
             // 欧洲（ISO1833 / DIN / EN / BS）与澳洲（AS 2001.7）体系恒两位小数。
             //
-            // 同名只留第一条。
-            // 去重不会改到值：能走到这里行的回潮率都是按名字查表来的（双组分父行已被上面
-            // 那道 MoistureRegainKnown 排除），同名必然同值。
-            // 国标（FZ/T 01057）时纤维名带中文，与 Test Result 那一列同一套取名口。
-            // 去重仍在**英文原名**上做（DistinctBy 排在取名之前）—— 反过来的话，
-            // 同一只纤维在表里出现两种写法就会重复列一条。
+            // 取名与 Test Result 同一套（先改拼法、后中文化，见 DisplayNameForReport）——
+            // 两处口径不一致过：国标录 `Linen` 时 result 印 `亚麻Flax`、页脚却印 `亚麻Linen`。
+            // 三类父槽（纤维素 / 再生纤维素 / 复合纤维）本来 MoistureRegainKnown = false，不进这里。
+            //
+            // 同名只留第一条，去重放在**取名之后** —— 按印出来的名字去重，
+            // `Flax` / `Linen` 这类同一只纤维的两种拼法才只列一条。
+            // 去重不会改到值：能走到这里的回潮率都是按名字查表来的，同名必然同值。
             var useChinese = analysisResult.UseChineseNames;
             var keepTwoDecimals = MoistureRegainResolver.UsesIsoSchedule(analysisResult.Methods);
             var mrItems = analysisResult.CalculatedFiberResult
@@ -141,8 +142,14 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
                 .SelectMany(m => m.MultiFiberRowUnits ?? new List<MultiFiberRowUnit>())
                 .Where(r => !string.IsNullOrWhiteSpace(r.Sum) && !r.Sum.Contains('/'))
                 .Where(r => r.MoistureRegainKnown)
-                .DistinctBy(r => r.Sum)
-                .Select(r => $"{FiberChineseName.Localize(r.Sum, useChinese ? analysisResult.ChineseFiberNames : null)} {FormatFooterMoistureRegain(r.MoistureRegain, keepTwoDecimals)}%");
+                .Select(r => new
+                {
+                    Name = IngredientAnalysisCalculation.DisplayNameForReport(
+                        r.Sum, analysisResult.Methods, useChinese, analysisResult.ChineseFiberNames),
+                    r.MoistureRegain,
+                })
+                .DistinctBy(x => x.Name)
+                .Select(x => $"{x.Name} {FormatFooterMoistureRegain(x.MoistureRegain, keepTwoDecimals)}%");
             flatData["MR"] = string.Join("  ", mrItems);
 
             // 计数字段
@@ -327,7 +334,13 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
                 // 父槽下插的展示子行（纤维素 / 复合纤维）**缩进两格**，一眼看出它是上一行拆出来的。
                 // 缩进只发生在展示层 —— 领域层存的仍是光名字（页脚汇总、结果表都按原名认）。
                 result[$"Sum_{rowIndex}"] = unit.IsDisplaySubRow ? "  " + unit.Sum : unit.Sum;
-                result[$"GSMTrail1_{rowIndex}"] = unit.GSMTrail1 == 0 ? "" : unit.GSMTrail1.ToString("F4");
+                // Trial # 1：有克重印克重；纤维素子行没有克重，改印**录入的占比**（50.00%）。
+                // 只影响这一格，Rate / Test Result 一个数都不动 —— 两者口径本来就不同
+                // （Rate 按公定重量份额切，见 AppendCellulosicSubRows）。
+                result[$"GSMTrail1_{rowIndex}"] =
+                    unit.GSMTrail1 != 0 ? unit.GSMTrail1.ToString("F4")
+                    : unit.DeclaredShare is { } share ? share.ToString("F2") + "%"
+                    : "";
                 result[$"GSMTrail2_{rowIndex}"] = unit.GSMTrail2 == 0 ? "" : unit.GSMTrail2.ToString("F4");
                 result[$"RateTrail1_{rowIndex}"] = unit.RateTrail1 == 0 ? "" : unit.RateTrail1.ToString("F2") + "%";
                 result[$"RateTrail2_{rowIndex}"] = unit.RateTrail2 == 0 ? "" : unit.RateTrail2.ToString("F2") + "%";

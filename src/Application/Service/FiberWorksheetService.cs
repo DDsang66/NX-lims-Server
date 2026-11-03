@@ -66,7 +66,8 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         /// **顺序与 <see cref="MethodOptionsCurrent"/> 逐条对齐**，只有两类差别：
         ///
         /// <list type="number">
-        /// <item><b>换值（体系名不变、版本变）</b> —— 两条 AATCC 的年份 `2025` → `2021`。
+        /// <item><b>换值（体系名不变、版本变）</b> —— 两条 AATCC 的 TM20A 年份 `2025` → `2021e`
+        /// （2026-11-03 用户裁定：2C 口径认的是 **2021e** 这一版，`e` 是 AATCC 的修订版后缀）。
         /// **只换值、不补空格**：Korea 那条本来就是单空格，与双空格那条是两个不同的串，
         /// 别顺手统一。</item>
         /// <item><b>删除</b> —— CAN / CNS / JIS 三族整族不进（xlsx 里 CNAS 列写「无CNAS能力」）。
@@ -80,13 +81,13 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         {
             "Regulation (Eu) No. 1007/2011",
             "AATCC TM20-2021",
-            "AATCC TM20-2021  AATCC TM20A-2021",
+            "AATCC TM20-2021  AATCC TM20A-2021e",
             "ISO1833",
             "DIN EN ISO 1833",
             "EN ISO 1833",
             "BS EN ISO 1833",
             "FZ/T 01057",
-            "AATCC TM20-2021 AATCC TM20A-2021 (Korea)",
+            "AATCC TM20-2021 AATCC TM20A-2021e (Korea)",
             "AS 2001.7-2005  AS/NZS 2622:1996",
         };
 
@@ -478,15 +479,69 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         }
 
         /// <summary>
-        /// 收集要插显微镜图的纤维名 —— 多组分展开所有溶解单元。
+        /// 收集要插显微镜图的纤维名 —— 多组分展开所有溶解单元，**父行下的展示子行一并算进来**。
+        ///
+        /// <para>
+        /// 用户 2026-11-03：「子行纤维的图片也要，不要重复」。子行（纤维素子纤维 /
+        /// 复合纤维的两个组分子成分）在图库里有图就印；没图的仍由
+        /// <see cref="IWordTemplateEngine.InsertMicroscopeImages"/> 整条跳过、不占槽位。
+        /// </para>
+        /// <para>
+        /// **去重按解析后的图库文件名**：<c>Spandex</c> 与 <c>Elastane</c> 指向同一张图，
+        /// 只该印一次（图注保留首现的录入名，别名表只用于找文件）。
+        /// </para>
         /// </summary>
         private static IReadOnlyList<string> CollectMicroscopeFiberNames(IEnumerable<FiberComponent> components)
             => components
-                .SelectMany(c => c is DissolvedFiberComponent d
-                    ? d.DissolutionUnits.Select(u => u.FiberName)
-                    : new[] { c.FiberName })
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .SelectMany(RowFiberNames)
+                .DistinctBy(
+                    n => (MicroscopeImageName.Resolve(n) ?? string.Empty).Trim(),
+                    StringComparer.OrdinalIgnoreCase)
                 .ToList();
+
+        /// <summary>
+        /// 一行（父行 + 其下展示子行）的纤维名，顺序即称量表行序：父行在前、子行按录入顺序在后。
+        /// </summary>
+        private static IEnumerable<string> RowFiberNames(FiberComponent component)
+        {
+            switch (component)
+            {
+                case DissolvedFiberComponent dissolved:
+                    foreach (var unit in dissolved.DissolutionUnits)
+                        foreach (var name in RowFiberNames(
+                                     unit.FiberName, unit.CellulosicSubFibers, unit.BicomponentSubFibers))
+                            yield return name;
+                    break;
+
+                case SplittingFiberComponent splitting:
+                    foreach (var name in RowFiberNames(
+                                 splitting.FiberName, splitting.CellulosicSubFibers, splitting.BicomponentSubFibers))
+                        yield return name;
+                    break;
+
+                default:
+                    if (!string.IsNullOrWhiteSpace(component.FiberName))
+                        yield return component.FiberName;
+                    break;
+            }
+        }
+
+        private static IEnumerable<string> RowFiberNames(
+            string fiberName,
+            IReadOnlyList<CellulosicSubFiber>? cellulosicSubFibers,
+            IReadOnlyList<BicomponentSubFiber>? bicomponentSubFibers)
+        {
+            if (!string.IsNullOrWhiteSpace(fiberName))
+                yield return fiberName;
+
+            foreach (var sub in cellulosicSubFibers ?? Array.Empty<CellulosicSubFiber>())
+                if (!string.IsNullOrWhiteSpace(sub.FiberName))
+                    yield return sub.FiberName;
+
+            foreach (var sub in bicomponentSubFibers ?? Array.Empty<BicomponentSubFiber>())
+                if (!string.IsNullOrWhiteSpace(sub.FiberName))
+                    yield return sub.FiberName;
+        }
 
         /// <summary>
         /// 把第 2..N 份标准各渲一份中间产物，再合并进 <paramref name="basePath"/>（原地改写）。

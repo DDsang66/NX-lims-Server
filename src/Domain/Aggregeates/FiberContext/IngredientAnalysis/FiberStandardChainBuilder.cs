@@ -382,13 +382,30 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// 这是**纯参数**，不落库 —— 模式只在生成报告这一趟内存里活着，2C 与否由文件名承载。
         /// </para>
         /// </param>
+        /// <param name="needsGeneralPart">
+        /// 这条记录是否要走**通则**：**拆分列**里有成分（<see cref="SplittingFiberComponent"/>），
+        /// **或**「溶解 1 / 溶解 2」**两段都用上了**（两个及以上非空的溶解组）。
+        ///
+        /// <para>
+        /// 命中 → ISO / DIN / EN / BS 四族的链在鉴别法之后补一条**第 1 部分（通则）**。
+        /// 依据：手工分离只写在 1833-1 的 Annex B 里，没有单独的"手工分离"分部，拆分列走的正是这条路径；
+        /// 两段溶解是多段分析流程，通则管的也正是这个。
+        /// GB 侧不受影响 —— 它本来就恒印 <c>GB/T 2910.1</c>。
+        /// </para>
+        ///
+        /// <para>
+        /// 默认 <c>false</c> = **改动前的行为**，既有调用点与全部链测试不传时输出逐字不变。
+        /// 单组分没有拆分列、也没有溶解组，天然走不到这一段。
+        /// </para>
+        /// </param>
         internal static string BuildMethodString(
             string standard, List<string> fibers, IReadOnlyList<FiberSlot> slots,
-            bool isSingleComponent = false, StandardMode mode = StandardMode.Current)
+            bool isSingleComponent = false, StandardMode mode = StandardMode.Current,
+            bool needsGeneralPart = false)
         {
             if (string.IsNullOrWhiteSpace(standard)) return string.Empty;
 
-            return BuildSingleStdChain(standard, fibers, slots, isSingleComponent, mode);
+            return BuildSingleStdChain(standard, fibers, slots, isSingleComponent, mode, needsGeneralPart);
         }
 
         /// <summary>
@@ -401,7 +418,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// </summary>
         private static string BuildSingleStdChain(
             string standard, List<string> fibers, IReadOnlyList<FiberSlot> slots,
-            bool isSingleComponent, StandardMode mode)
+            bool isSingleComponent, StandardMode mode, bool needsGeneralPart)
         {
             if (string.IsNullOrWhiteSpace(standard)) return string.Empty;
 
@@ -472,6 +489,21 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                     : IsoMicroscopeChain(mode);
 
                 AddIfNotEmpty(parts, qualitative);
+
+                // 有拆分列、或溶解 1/溶解 2 两段都用上 → 补**第 1 部分（通则）**。
+                // 手工分离只写在 1833-1 的 Annex B 里，没有单独的"手工分离"分部 —— 拆分列走的正是这条路径；
+                // 两段溶解是多段分析流程，通则管的也是这个。
+                //
+                // 位置：紧跟鉴别法、在定量分部之前 —— 与 GB 侧「鉴别系列 → GB/T 2910.1 → 子标准」
+                // 同序。三元早退那一支读的是同一个 parts，故不必另写一遍。
+                //
+                // 2C 下四族的第 1 部分都能渲染（没有一枝写 `/`），所以这里不按模式分叉。
+                if (needsGeneralPart)
+                {
+                    var general = RenderIsoSub(fam, mode, 1);
+                    if (general.Length > 0 && !parts.Contains(general))
+                        parts.Add(general);
+                }
 
                 var subStandards = new List<string>();
                 foreach (var (first, second) in EnumeratePairs(slots))
@@ -758,13 +790,25 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
              || (FiberTokens.IsElastane(f) && (s == "polyamide" || s == "nylon")))
                 return hasAcrylic ? 12 : 20;
 
+            // 弹性纤维 × 羊毛 → -20（DMAc 法）。
+            // 1833-20:2018 的合作纤维名单逐字含 wool（cotton / viscose / cupro / modal / lyocell /
+            // polyamide / polyester / wool）。上面几条只覆盖了其中 7 个，羊毛一直掉到下面的
+            // -12 兜底上 —— 于是同一根弹性纤维在链里同时挂 -20 和 -12。
+            // 而 -12 只是该分部注明的**替代法**（"It is also possible to analyse mixtures
+            // containing certain elastane fibres by using … ISO 1833-12 or ISO 1833-21"），
+            // 不是并列引用。**必须放在 -12 兜底之前**：wool ∈ IsAnimal。
+            // 反序 (Wool, Elastane) 仍走上面的 -4（1833-4:2023 的合作纤维表含 elastane），
+            // 那是另一条合法的次氯酸盐法，刻意不动。
+            if (FiberTokens.IsElastane(f) && s == "wool")
+                return hasAcrylic ? 12 : 20;
+
             // 弹性纤维在前 → -12（DMF 法），**但后位必须是"某些其他纤维"**（按官方范围收紧）。
             //
             // 收紧后两向都落空，与标准一致。够不够格由 FiberTokens.IsIso1833_12OtherFibre 判定，
             // 收法见那个集合的注释（只收官方逐字列到的名字）。
             //
-            // 注意与前几条的分工：(Elastane, 纤维素) 与 (Elastane, Polyester) 走上面的 -20，
-            // 根本到不了这里。(Elastane, Acrylic/Modacrylic) **落空** —— 弹性纤维与腈纶都是
+            // 注意与前几条的分工：(Elastane, 纤维素)、(Elastane, Polyester) 与 (Elastane, Wool)
+            // 走上面的 -20，根本到不了这里。(Elastane, Acrylic/Modacrylic) **落空** —— 弹性纤维与腈纶都是
             // -12 的**对象**纤维、都能被 DMF 溶掉，这一对分不出比例，-12 与 -20 都不适用。
             if (FiberTokens.IsElastane(f) && FiberTokens.IsIso1833_12OtherFibre(s))
                 return 12;

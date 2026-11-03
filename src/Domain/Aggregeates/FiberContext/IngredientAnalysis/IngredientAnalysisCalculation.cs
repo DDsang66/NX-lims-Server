@@ -237,8 +237,21 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             // 详见 BuildMethodString 的 isSingleComponent 说明。
             // ⚠️ **不能**按纤维条数代传。
             // `mode` 是**第四个**维度（族 × 模式），只换分部印哪个版本，不换链路形状。
+            //
+            // 要不要补第 1 部分（通则） → ISO/DIN/EN/BS 四族在鉴别法之后补一段。
+            // 触发两条：**拆分列**里有成分（手工分离只写在 1833-1 的 Annex B 里），
+            // 或「溶解 1 / 溶解 2」**两段都用上**（两个及以上非空的溶解组）。
+            // 空行前端会提交、适配器已滤掉，这里再判一次空白，手工构造 Components 的测试也不会误判。
+            //
+            // ⚠️ 溶解侧只能按 `DissolutionUnits` 是否非空来数：适配器对 fiberDissolvedList 的
+            // **每个条目**都建一个 DissolvedFiberComponent，空组也建（两条空组 = 2，会误判）。
+            var needsGeneralPart = Components.OfType<SplittingFiberComponent>()
+                    .Any(c => !string.IsNullOrWhiteSpace(c.FiberName))
+                || Components.OfType<DissolvedFiberComponent>()
+                    .Count(c => c.DissolutionUnits.Any(u => !string.IsNullOrWhiteSpace(u.FiberName))) >= 2;
             var methodString = FiberStandardChainBuilder.BuildMethodString(
-                standard, orderedFiberNames, GetOrderedFiberSlots(), Type == AnalysisType.Single, mode);
+                standard, orderedFiberNames, GetOrderedFiberSlots(), Type == AnalysisType.Single, mode,
+                needsGeneralPart);
             result = result.WithMethods(methodString);
 
             // 3.6.1) 国标中文化 —— **按段**判定，读的是本份的标准（与上面那条同源）。
@@ -582,6 +595,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// 没有称量值（GSMTrail / RateTrail / Avg / Correct 全 0），因此不参加 Rate 分母
         /// （<see cref="CalculateRates"/> 已经跑完）、也不进结果表与成分数
         /// （那两处都跳过 <see cref="MultiFiberRowUnit.IsCellulosicSubRow"/>）。
+        /// 录入的占比另存 <see cref="MultiFiberRowUnit.DeclaredShare"/>，只给称量表 Trial # 1 那一格印
+        /// （2026-11-03）—— 它不参与上面任何算术。
         /// </para>
         /// <para>
         /// 父行 Rate 是未取整的全精度，而报告印两位小数，所以这里按 **F2** 切，
@@ -636,6 +651,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                             MoistureRegain = moistureRegain ?? 0m,
                             MoistureRegainKnown = moistureRegain is not null,
                             Rate = rate,
+                            // 录入比例只给称量表 Trial # 1 那一格用；0 / 缺省视为没录，留空。
+                            DeclaredShare = sub.Percentage > 0 ? sub.Percentage : null,
                             IsCellulosicSubRow = true
                         });
                     }
@@ -1161,6 +1178,32 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         }
 
         /// <summary>
+        /// 报告显示名 —— 与 Test Result 同一套两步：先按标准改拼法，再按国标加中文。
+        /// 页脚 MR 汇总用它（适配器拿不到 private 的 <see cref="ReportFiberNaming"/>）。
+        ///
+        /// <paramref name="methods"/> 传 <c>AnalysisResult.Methods</c>，<paramref name="useChineseNames"/>
+        /// 传 <c>AnalysisResult.UseChineseNames</c>：
+        /// · 国标闸门必须用那个布尔，**不能**对 methods 调 <c>IsChineseReport</c> ——
+        ///   国标的 Methods 是 `FZ/T 01057.1-4…` 渲染链，精确等值不成立；
+        /// · AATCC/Korea/CNS/JIS/AS/Regulation 的 Methods 是标准原文，
+        ///   ISO/DIN/EN/BS 的是含 `ISO` 的渲染链，<c>For</c> 的判据都仍然成立；
+        /// · Korea 先于 AATCC 的顺序也不受影响（Korea 串逐字留在 Methods 里）。
+        /// </summary>
+        public static string DisplayNameForReport(
+            string name, string? methods, bool useChineseNames,
+            IReadOnlyDictionary<string, string>? chineseNames)
+        {
+            var naming = ReportFiberNaming.For(
+                methods,
+                useChineseNames,
+                methods?.StartsWith("AATCC", StringComparison.OrdinalIgnoreCase) == true);
+
+            var printed = naming.Apply(name);
+
+            return useChineseNames ? FiberChineseName.Localize(printed, chineseNames) : printed;
+        }
+
+        /// <summary>
         /// 亚 5% 却**仍然点名**的两类纤维 —— 16 CFR § 303.3(a) 给了两个豁免，这里各用其一：
         ///
         /// · **功能性**：原文举的例子就是 4% spandex（"96 percent acetate, 4 percent spandex"）。
@@ -1609,9 +1652,9 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         }
 
         /// <summary>
-        /// Bicomponent/Biconstituent 格式化：
-        /// TestResult: "X% Polyester/Polyamide bicomponent (Y%Polyester Z%Polyamide)"
-        /// Recommendation: "X% Bicomponent Fiber (Y%Polyester Z%Polyamide)"
+        /// Bicomponent/Biconstituent 格式化（括号内按占比**从大到小**，Y ≥ Z）：
+        /// TestResult: "X% Polyester/Polyamide bicomponent (Y%Polyamide Z%Polyester)"
+        /// Recommendation: "X% Bicomponent Fiber (Y%Polyamide Z%Polyester)"
         /// </summary>
         private List<string> PostProcessBicomponent(List<string> results,
             List<CalculatedFiberResult> calculatedFiberResult, string format)
@@ -1670,10 +1713,19 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                     s1Pct = (100m - residueShare).ToString("F1");
                 }
 
+                // 括号内按**占比从大到小**印。
+                // OrderByDescending 是稳定排序：两半相等时仍按 s1、s2 原顺序。
+                // 只动括号里那两个数，父名前面那串 `Polyester/Polyamide bicomponent` 照旧。
+                var inner = new[] { (Name: s1Name, Pct: s1Pct, Share: 100m - residueShare),
+                                    (Name: s2Name, Pct: s2Pct, Share: residueShare) }
+                    .OrderByDescending(x => x.Share)
+                    .Select(x => $"{x.Pct}%{x.Name}")
+                    .ToList();
+
                 if (line.Contains("Biconstituent Fiber"))
-                    results[i] = $"{parentPct}% {fullName} ({s1Pct}%{s1Name} {s2Pct}%{s2Name})";
+                    results[i] = $"{parentPct}% {fullName} ({string.Join(" ", inner)})";
                 else
-                    results[i] = $"{parentPct}% {s1Name}/{s2Name} {shortName} ({s1Pct}%{s1Name} {s2Pct}%{s2Name})";
+                    results[i] = $"{parentPct}% {s1Name}/{s2Name} {shortName} ({string.Join(" ", inner)})";
             }
 
             return results;

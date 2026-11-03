@@ -50,6 +50,23 @@
         public decimal Correct { get; init; }
 
         /// <summary>
+        /// 录入时填的**占比**（`cellulosicSubFibers[].percentage`，0–100），**只决定称量表 Trial # 1 那一格印什么**。
+        ///
+        /// <para>
+        /// 只有纤维素父槽下插的展示子行才有值 —— 它们没有自己的称量值，
+        /// 报告上就在 Trial # 1 印录入的比例（`50.00%`），说明父行那 100% 是按这个比例录的。
+        /// 复合纤维子行保持 null（它们有自己的克重录入，另走一边）。
+        /// </para>
+        /// <para>
+        /// ⚠️ **不参与任何算术**：Rate 仍按公定重量份额切（见 <c>AppendCellulosicSubRows</c>），
+        /// 所以印 `50.00%` 而 Rate 可能是 `49.21%` —— 两列口径不同是刻意的。
+        /// 也**不要**把它塞进 <see cref="GSMTrail1"/>：那个字段承载克重，
+        /// 称量瓶表与诊断工装都按它的语义读。
+        /// </para>
+        /// </summary>
+        public decimal? DeclaredShare { get; init; }
+
+        /// <summary>
         /// 扣掉"下一个成员被 d 放大出来的增量"之后的 <see cref="Avg"/>，**只用来算 Rate、不上报告**。
         /// <c>U_i = Avg_i·Correct_i − Avg_{i+1}·(Correct_{i+1} − 1)</c>，组内最后一个成员不扣。
         /// 为空表示这一行没走扣减链（反序列化 / 直接构造），公式回退到 <c>Avg × Correct</c>。
