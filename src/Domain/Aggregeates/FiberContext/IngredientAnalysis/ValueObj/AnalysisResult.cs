@@ -70,6 +70,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         public string Equipment_Balance => Get<string>("Equipment_Balance") ?? string.Empty;
         public string Equipment_WaterBath => Get<string>("Equipment_WaterBath") ?? string.Empty;
         public string Equipment_Shaker => Get<string>("Equipment_Shaker") ?? string.Empty;
+        public string Equipment_MicroscopeCellulosic => Get<string>("Equipment_MicroscopeCellulosic") ?? string.Empty;
 
         // --------------------------
         // 强类型辅助访问器（纤维项）
@@ -235,6 +236,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             copy["Equipment_Balance"] = equipment.Balance;
             copy["Equipment_WaterBath"] = equipment.WaterBath;
             copy["Equipment_Shaker"] = equipment.Shaker;
+            copy["Equipment_MicroscopeCellulosic"] = equipment.MicroscopeCellulosic;
             return new AnalysisResult(copy);
         }
 

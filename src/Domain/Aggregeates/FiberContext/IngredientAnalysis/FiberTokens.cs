@@ -175,6 +175,20 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             || Clean(f).Equals("metal fiber", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
+        /// 金属镀膜纤维 —— 统一拼法：ISO 印 <c>Metallised fibre</c>（英式单数），
+        /// 国标 / AATCC 印 <c>Metallized fibres</c>（美式复数）；其余标准照录入。
+        ///
+        /// 命中 fiber_database 里中文名为「金属镀膜纤维」的那三行，精确等值、忽略大小写与首尾空白：
+        /// <c>Metallized fibres</c>（美式复数）、<c>Metallised fibre</c>（英式单数）、<c>Metallic</c>（简称）。
+        /// **与 <see cref="IsMetalFibre"/> 互斥** —— 那一支是金属纤维（中文名「金属纤维」），
+        /// 两支都只改印出来的名字，取值/排序/去重仍用录入名。
+        /// </summary>
+        internal static bool IsMetallizedFibre(string f)
+            => Clean(f).Equals("metallized fibres", StringComparison.OrdinalIgnoreCase)
+            || Clean(f).Equals("metallised fibre", StringComparison.OrdinalIgnoreCase)
+            || Clean(f).Equals("metallic", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 橡筋 —— `Elastodiene` 与 `Rubber` 是 fiber_database 里**同一纤维的两行**
         /// （中文名同为"二烯类弹性纤维"）。精确等值、忽略大小写与首尾空白。
         ///

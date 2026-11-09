@@ -264,6 +264,13 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// <summary>
         /// 把分部号渲染成**某一族 × 某一模式**的串 —— 只是选表，规则体不在这里。
         /// 返回空串 = 该族该模式下这个分部落空，**调用方负责跳过**（别让空串占位）。
+        ///
+        /// <para>
+        /// **2C 下 `-22` 就是落空**：
+        /// 四张表的 `-22` 资质列都写 `/`，这一对在 2C 报告上**一个定量分部都不印**，
+        /// 也不拿 -6 顶替 —— 甲酸/氯化锌法是另一个方法，不能替 -22 背书。
+        /// 常规口径不受影响，仍印 -22。
+        /// </para>
         /// </summary>
         private static string RenderIsoSub(StandardFamily family, StandardMode mode, int part)
         {
@@ -350,7 +357,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// <b>它是整条链的分流开关</b>：单组分走
         /// <see cref="BuildSingleComponentChain"/> —— **一律不派生定量子标准**，
         /// 只出勾选的标准本身 + 鉴别法（ISO/DIN 侧 <c>ISO/TR 11827</c>，
-        /// GB 侧 <c>FZ/T 01057.3-2025</c>）。
+        /// GB 侧 <c>FZ/T 01057.3-2025</c>）；ISO/DIN/EN/BS 四族**另补第 1 部分（通则）**
+        /// 见 <see cref="BuildSingleComponentChain"/>。
         /// 默认 <c>false</c> = 多组分 = **改动前的行为**，所以既有调用点与全部测试
         /// 不传这个参数时输出逐字不变。
         /// </para>
@@ -619,7 +627,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         }
 
         /// <summary>
-        /// **单组分**（<see cref="AnalysisType.Single"/>）的标准链 —— 只出「勾选的标准本身 + 鉴别法」。
+        /// **单组分**（<see cref="AnalysisType.Single"/>）的标准链 —— 只出「勾选的标准本身 + 鉴别法」，
+        /// ISO / DIN / EN / BS 四族**再补第 1 部分（通则）**。
         ///
         /// <para>
         /// 单组分表里每行是**不同测点下的各一种组分**（每行一种纤维、各 100%），
@@ -629,6 +638,13 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// T129 补 GB/T 2910.1、T130 按纤维对查 GB 子标准、T131 三元/四元（2910.2 / FZ/T 01026）、
         /// cellulosic 父槽的 ISO 20705 / FZ/T 30003、以及 ISO 侧的 subStandards 与三元早退，
         /// 全部只在多组分路径生效。
+        /// </para>
+        ///
+        /// <para>
+        /// <b>第 1 部分是例外</b>（2026-11-08 用户裁定）：它不是"按纤维对查出来的定量分部"，
+        /// 而是这套标准的通则（适用范围、术语、取样与试验通则）—— 定性鉴别报告同样要落它，
+        /// 与多组分侧"有拆分列/两段溶解就补 -1"是同一条思路。**-2 及以后一个都不补。**
+        /// 四族各印各的前缀与年份（<see cref="RenderIsoSub"/>）。
         /// </para>
         ///
         /// <para>
@@ -645,15 +661,24 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// 四族之一是 ISO 族，<c>null</c> = GB 族（调用方已保证二者必居其一）。
         /// </param>
         /// <param name="mode">
-        /// 取值口径。单组分链里只有「鉴别法」那一条，而鉴别法**不分模式**（见
-        /// <see cref="QualitativeFor"/>），所以对 ISO / DIN / EN / BS 四族这个参数**没有效果**；
-        /// 只在 GB 侧生效 —— FZ/T 01057 系列的 `.2/.3` 退回 2007。
+        /// 取值口径。单组分链里「鉴别法」**不分模式**（见 <see cref="QualitativeFor"/>）；
+        /// ISO / DIN / EN / BS 四族的第 1 部分走 <see cref="RenderIsoSub"/>，理论上可分模式，
+        /// 但四张表的第 1 部分**都没有写 `/`**，现状下两模式同值。
+        /// GB 侧照旧 —— FZ/T 01057 系列的 `.2/.3` 退回 2007。
         /// </param>
         private static string BuildSingleComponentChain(
             string standard, StandardFamily? family, StandardMode mode)
         {
-            // ISO / DIN / EN / BS：只有鉴别标准 —— 没有 subStandards、没有三元早退、没有 cellulosic 那串。
-            if (family is StandardFamily f) return QualitativeFor(f);
+            // ISO / DIN / EN / BS：鉴别法 + 第 1 部分（通则）——
+            // 没有 subStandards、没有三元早退、没有 cellulosic 那串、也没有 -2 及以后。
+            // 识别顺序照多组分路径：鉴别法领队，通则紧跟其后。
+            if (family is StandardFamily f)
+            {
+                var isoParts = new List<string>();
+                AddIfNotEmpty(isoParts, QualitativeFor(f));
+                AddIfNotEmpty(isoParts, RenderIsoSub(f, mode, 1));
+                return string.Join(" ", isoParts);
+            }
 
             var parts = new List<string>();
 

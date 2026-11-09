@@ -91,6 +91,26 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
             "AS 2001.7-2005  AS/NZS 2622:1996",
         };
 
+        /// <summary>
+        /// **单组分下拉不供**的几族（2026-11-09 实验室裁定）：
+        /// 两条 AATCC 复合方法（<c>TM20A</c>，含 Korea 变体）、CNS、JIS。
+        ///
+        /// **只影响下拉摆什么**，不影响生成：库里既有的这些方法串照旧能算、能出报告，
+        /// 单组分勾了别的定量标准也照印（「不派生」是链上的口径，不是下拉的闸）。
+        /// 判据按串本身：<c>TM20A</c> 覆盖两条复合方法 + Korea 变体，<c>AATCC TM20-2021</c> 单独保留。
+        /// </summary>
+        private static bool IsSingleComponentExcluded(string method)
+            => method.StartsWith("CNS", StringComparison.OrdinalIgnoreCase)
+            || method.StartsWith("JIS", StringComparison.OrdinalIgnoreCase)
+            || method.Contains("TM20A", StringComparison.Ordinal);
+
+        /// <summary>单组分版的两份清单 —— 由上面两份**推导**，不另抄一遍。</summary>
+        private static readonly IReadOnlyList<string> MethodOptionsCurrentSingle =
+            MethodOptionsCurrent.Where(m => !IsSingleComponentExcluded(m)).ToList();
+
+        private static readonly IReadOnlyList<string> MethodOptionsDualSingle =
+            MethodOptionsDual.Where(m => !IsSingleComponentExcluded(m)).ToList();
+
         private readonly IFiberWorksheetRepository _worksheetRepo;
         private readonly IFiberDatabaseRepository _fiberDatabaseRepo;
         private readonly IWordTemplateAdapter _wordTemplateAdapter;
@@ -154,8 +174,10 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         /// 标准清单是本类的私有常量 —— 理由见 <see cref="MethodOptionsCurrent"/>。
         ///
         /// <para>
-        /// <b>两份标准清单一次返回</b>（<c>methodOptions</c> = 常规、<c>methodOptions2C</c> = 2C）：
-        /// 于是切模式是**纯前端动作**，不用再请求一次，也不会因为网络慢而让下拉短暂空掉。
+        /// <b>四份标准清单一次返回</b>：<c>methodOptions</c> / <c>methodOptions2C</c>（多组分）、
+        /// <c>methodOptionsSingle</c> / <c>methodOptions2CSingle</c>（单组分，比多组分少
+        /// AATCC TM20A 复合两条、CNS、JIS，见 <see cref="IsSingleComponentExcluded"/>）。
+        /// 于是切口径、切单/多组分都是**纯前端动作**，不用再请求一次，也不会因为网络慢让下拉短暂空掉。
         /// </para>
         ///
         /// 无需 await：全是常量与静态表，没有任何 I/O。返回类型保持与
@@ -173,6 +195,8 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
                     bicomponentSub = FiberOptions.BicomponentSub,
                     methodOptions = MethodOptionsCurrent,
                     methodOptions2C = MethodOptionsDual,
+                    methodOptionsSingle = MethodOptionsCurrentSingle,
+                    methodOptions2CSingle = MethodOptionsDualSingle,
                 }
             };
             return Task.FromResult(payload);

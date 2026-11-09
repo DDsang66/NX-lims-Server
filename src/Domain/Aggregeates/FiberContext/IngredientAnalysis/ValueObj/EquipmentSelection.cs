@@ -21,11 +21,18 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// <summary>O24 — 振荡器（含锦纶/羊毛/丝绸或拆分列时选用）</summary>
         public string Shaker { get; init; } = string.Empty;
 
+        /// <summary>
+        /// 纤维素 / 再生纤维素父槽追加的第二台显微镜——
+        /// 印在 Equipment 整串的**末位**，不是塞回 <see cref="Microscope"/> 里。
+        /// </summary>
+        public string MicroscopeCellulosic { get; init; } = string.Empty;
+
         public bool IsEmpty =>
             string.IsNullOrEmpty(Microscope)
             && string.IsNullOrEmpty(Oven)
             && string.IsNullOrEmpty(Balance)
             && string.IsNullOrEmpty(WaterBath)
-            && string.IsNullOrEmpty(Shaker);
+            && string.IsNullOrEmpty(Shaker)
+            && string.IsNullOrEmpty(MicroscopeCellulosic);
     }
 }

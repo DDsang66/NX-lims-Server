@@ -232,9 +232,9 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             // 上面的设备选型、上面的显微镜追加、以及规则表里的三处 `*cellulosic fibre` 字面量判定。
             // 三条通道职责不同，不合并：扁平列表管"报告上印什么"，槽位管"拿哪些名字去查表"。
             //
-            // 末位那个 `Type == Single` 是**整条链的分流开关**：单组分走
-            // BuildSingleComponentChain —— 一律不派生定量子标准，只出勾选的标准本身 + 鉴别法。
-            // 详见 BuildMethodString 的 isSingleComponent 说明。
+            // `Type == Single` 是**整条链的分流开关**：单组分走
+            // BuildSingleComponentChain —— 一律不派生定量子标准，只出勾选的标准本身 + 鉴别法；
+            // ISO / DIN / EN / BS 四族另补第 1 部分（通则）。详见 BuildMethodString 的说明。
             // ⚠️ **不能**按纤维条数代传。
             // `mode` 是**第四个**维度（族 × 模式），只换分部印哪个版本，不换链路形状。
             //
@@ -775,7 +775,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             RemarkLabel remarkLabel, List<CalculatedFiberResult> calculatedFiberResult, string standard)
         {
             // AATCC 美标：原始 Rate < 5% 且不在豁免名单里的纤维 → 合并为 "other fiber(s)"
-            // （规则与豁免见 CalculateFormattedResults 与 IsNamedBelowFivePercent）。
+            // （规则与豁免见 CalculateFormattedResults 与 IsNamedBelowFivePercent，
+            //  2026-11-08 起橡筋也在豁免名单里）。
             // 必须按**这一份自己的**标准判：读 Methods[0] 的话，单标准下与入参同值、行为不变，
             // 多标准下却会让 ISO 段拿到 AATCC 的合并口径（或反过来）。
             // 只喂 Recommendation 那一列 —— Test Result 照实测逐项点名，见下面 Results 的说明。
@@ -786,7 +787,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             // 与 AATCC 天然互斥 —— 一个标准串不可能既是 FZ/T 又是 AATCC。
             var isGb = FiberChineseName.IsChineseReport(standard);
 
-            // 报告上的**显示名**策略（亚麻 / 氨纶 / 金属纤维 / 橡筋 / 锦纶 / 粘纤 / 莫代尔·莱赛尔），
+            // 报告上的**显示名**策略（亚麻 / 氨纶 / 金属纤维 / 金属镀膜纤维 / 橡筋 / 锦纶 / 粘纤 / 莫代尔·莱赛尔），
             // 按本份标准一张表选（见 ReportFiberNaming.For）。
             // 两列都要改，所以不能复用 isAatcc（那只喂 Recommendation 的亚 5% 聚合）。
             // 只改印出来的名字 —— 查表、排序、去重仍用录入名（见 ResultFiberName）。
@@ -860,7 +861,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             var rawComponents = ExtractComponents(calculatedFiberResult);
 
             // 1.5 AATCC 美标（16 CFR § 303.3(a)）：原始 Rate < 5% 的纤维**不得写通用名**，一律并成一行。
-            //     两类豁免见 IsNamedBelowFivePercent。
+            //     豁免名单见 IsNamedBelowFivePercent（弹性纤维 / 橡筋 / 羊毛）。
             if (isAatcc)
             {
                 var normal = new List<(string Name, decimal Rate)>();
@@ -990,6 +991,18 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         }
 
         /// <summary>
+        /// 金属镀膜纤维显示名：`AsEntered` 照录入原样，
+        /// `MetallisedFibre` 印英式单数（ISO 用），`MetallizedFibres` 印美式复数（国标 / AATCC 用）。
+        /// 只影响印出来的名字，不进任何取值/排序/聚合的键。
+        /// </summary>
+        private enum MetallizedNaming
+        {
+            AsEntered,
+            MetallisedFibre,
+            MetallizedFibres,
+        }
+
+        /// <summary>
         /// 橡筋显示名：`AsEntered` 照录入原样，另两种把 Elastodiene/Rubber 统一成其中一个名字。
         /// 只影响印出来的名字，不进任何取值/排序/聚合的键。
         /// </summary>
@@ -1033,7 +1046,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         }
 
         /// <summary>
-        /// 报告上的纤维**显示名**策略 —— 亚麻、氨纶、金属纤维、橡筋、锦纶、粘纤、莫代尔/莱赛尔
+        /// 报告上的纤维**显示名**策略 —— 亚麻、氨纶、金属纤维、金属镀膜纤维、橡筋、锦纶、粘纤、莫代尔/莱赛尔
         /// 合在一处，按本份标准选一次。
         /// 只影响印出来的名字，不进任何取值/排序/聚合的键。
         /// </summary>
@@ -1042,16 +1055,19 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             /// <summary>全照录入（无规则命中时的默认值）。</summary>
             public static readonly ReportFiberNaming AsEntered =
                 new(LinenFlaxNaming.AsEntered, ElastaneNaming.AsEntered, MetalNaming.AsEntered,
+                    MetallizedNaming.AsEntered,
                     ElastodieneNaming.AsEntered, PolyamideNaming.AsEntered, ViscoseNaming.AsEntered,
                     RegeneratedNaming.AsEntered);
 
             private ReportFiberNaming(LinenFlaxNaming linen, ElastaneNaming elastane, MetalNaming metal,
+                                      MetallizedNaming metallized,
                                       ElastodieneNaming elastodiene, PolyamideNaming polyamide,
                                       ViscoseNaming viscose, RegeneratedNaming regenerated)
             {
                 Linen = linen;
                 Elastane = elastane;
                 Metal = metal;
+                Metallized = metallized;
                 Elastodiene = elastodiene;
                 Polyamide = polyamide;
                 Viscose = viscose;
@@ -1061,6 +1077,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             private LinenFlaxNaming Linen { get; }
             private ElastaneNaming Elastane { get; }
             private MetalNaming Metal { get; }
+            private MetallizedNaming Metallized { get; }
             private ElastodieneNaming Elastodiene { get; }
             private PolyamideNaming Polyamide { get; }
             private ViscoseNaming Viscose { get; }
@@ -1081,32 +1098,38 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 // Korea 刻意落在 AATCC 之前、且不继承 AATCC 的短名（Metal / Rubber)。
                 if (standard?.Contains("Korea", StringComparison.OrdinalIgnoreCase) == true)
                     return new ReportFiberNaming(LinenFlaxNaming.AsEntered, ElastaneNaming.Polyurethane, MetalNaming.AsEntered,
+                        MetallizedNaming.AsEntered,
                         ElastodieneNaming.AsEntered, PolyamideNaming.AsEntered, ViscoseNaming.Rayon,
                         RegeneratedNaming.AsEntered);
 
                 if (isGb)
                     return new ReportFiberNaming(LinenFlaxNaming.Flax, ElastaneNaming.Elastane, MetalNaming.AsEntered,
+                        MetallizedNaming.MetallizedFibres,
                         ElastodieneNaming.Elastodiene, PolyamideNaming.Polyamide, ViscoseNaming.Viscose,
                         RegeneratedNaming.AsEntered);
 
                 if (isAatcc)
                     return new ReportFiberNaming(LinenFlaxNaming.Linen, ElastaneNaming.AsEntered, MetalNaming.Metal,
+                        MetallizedNaming.MetallizedFibres,
                         ElastodieneNaming.Rubber, PolyamideNaming.AsEntered, ViscoseNaming.AsEntered,
                         RegeneratedNaming.AsEntered);
 
                 if (standard?.StartsWith("CNS", StringComparison.OrdinalIgnoreCase) == true)
                     return new ReportFiberNaming(LinenFlaxNaming.AsEntered, ElastaneNaming.Spandex, MetalNaming.AsEntered,
+                        MetallizedNaming.AsEntered,
                         ElastodieneNaming.AsEntered, PolyamideNaming.AsEntered, ViscoseNaming.AsEntered,
                         RegeneratedNaming.AsEntered);
 
                 // JIS：莫代尔 / 莱赛尔印成「大类名 (具体纤维)」，见 RegeneratedNaming。
                 if (standard?.StartsWith("JIS", StringComparison.OrdinalIgnoreCase) == true)
                     return new ReportFiberNaming(LinenFlaxNaming.AsEntered, ElastaneNaming.Polyurethane, MetalNaming.AsEntered,
+                        MetallizedNaming.AsEntered,
                         ElastodieneNaming.AsEntered, PolyamideNaming.AsEntered, ViscoseNaming.Rayon,
                         RegeneratedNaming.JisParenthetical);
 
                 if (standard?.Contains("ISO", StringComparison.OrdinalIgnoreCase) == true)
                     return new ReportFiberNaming(LinenFlaxNaming.AsEntered, ElastaneNaming.Elastane, MetalNaming.AsEntered,
+                        MetallizedNaming.MetallisedFibre,
                         ElastodieneNaming.Elastodiene, PolyamideNaming.AsEntered, ViscoseNaming.Viscose,
                         RegeneratedNaming.AsEntered);
 
@@ -1120,6 +1143,14 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             {
                 if (Metal != MetalNaming.AsEntered && FiberTokens.IsMetalFibre(name))
                     return "Metal";
+
+                // 金属镀膜纤维与上面那支互斥（IsMetalFibre 不认 Metallised/Metallic），先后无影响。
+                if (Metallized != MetallizedNaming.AsEntered && FiberTokens.IsMetallizedFibre(name))
+                {
+                    return Metallized == MetallizedNaming.MetallisedFibre
+                        ? "Metallised fibre"
+                        : "Metallized fibres";
+                }
 
                 if (Polyamide != PolyamideNaming.AsEntered && FiberTokens.IsPolyamideOrNylon(name))
                     return "Polyamide";
@@ -1159,7 +1190,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         }
 
         /// <summary>
-        /// 报告上印的纤维名：先按体系改名（亚麻 / 氨纶 / 金属纤维 / 橡筋 / 锦纶 / 粘纤 / 莫代尔·莱赛尔），
+        /// 报告上印的纤维名：先按体系改名（亚麻 / 氨纶 / 金属纤维 / 金属镀膜纤维 / 橡筋 / 锦纶 / 粘纤 / 莫代尔·莱赛尔），
         /// 国标且查得到中文 → `中文English`，否则原样。
         ///
         /// 这里是**唯一的**取名口，单组分与多组分两条格式化分支都走它 ——
@@ -1204,18 +1235,23 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         }
 
         /// <summary>
-        /// 亚 5% 却**仍然点名**的两类纤维 —— 16 CFR § 303.3(a) 给了两个豁免，这里各用其一：
+        /// 亚 5% 却**仍然点名**的纤维 —— 16 CFR § 303.3(a) 的豁免与实验室裁定：
         ///
-        /// · **功能性**：原文举的例子就是 4% spandex（"96 percent acetate, 4 percent spandex"）。
-        ///   代码只认这一例（<see cref="FiberTokens.IsElastane"/>），不外推。原文另一例是
+        /// · **弹性纤维**（<see cref="FiberTokens.IsElastane"/>）：§ 303.3(a) 的功能性例子就是
+        ///   4% spandex（"96 percent acetate, 4 percent spandex"），代码只认这一例。原文另一例是
         ///   2% nylon，但"某项小比例纤维有没有明确功能"要实验室逐单判，程序替它断言不如老实合并。
+        /// · **橡筋**（<see cref="FiberTokens.IsElastodieneOrRubber"/>）：
+        ///   美标下 Rubber / Elastodiene 一律点名，不并进 other fiber。谓词与弹性纤维分开
+        ///   （ISO 方法链口径不受影响，见该谓词注释）。
         /// · **羊毛**：§ 300.3(b)（羊毛法）—— 羊毛/回收羊毛**无论多少都得点名带百分比**。
         ///   名单见 <see cref="FiberTokens.IsWoolFamily"/>，比"动物纤维"窄得多。
         ///
         /// 只管**点不点名**，不管排序 —— 排序见 <see cref="CalculateFormattedResults"/> 第 5 步。
         /// </summary>
         private static bool IsNamedBelowFivePercent(string name)
-            => FiberTokens.IsElastane(name) || FiberTokens.IsWoolFamily(name);
+            => FiberTokens.IsElastane(name)
+            || FiberTokens.IsElastodieneOrRubber(name)
+            || FiberTokens.IsWoolFamily(name);
 
         /// <summary>是不是亚 5% 的聚合行 —— § 303.16(a)(1) 要求它排在最后，两种写法都算。</summary>
         private static bool IsOtherFiberLine(string name)
@@ -1774,8 +1810,10 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         // 显微镜设备串统一为 `Microscope: SFL-NGB-EQP-XXX`（冒号后带空格 + 设备号用连字符）。
         // 纯报告外观一致性，不涉及模板匹配 —— 模板与已生成 docx 里 `SFL` 均 0 命中。
         //
-        // ⚠️ 显微镜**只有一台**，别再按 cellulosic 父槽追加第二台。
+        // 纤维素 / 再生纤维素父槽另追加一台 268：
+        // 排在 Equipment 整串的末位（见适配器）。
         private const string MICROSCOPE = "Microscope: SFL-NGB-EQP-280";
+        private const string MICROSCOPE_CELLULOSIC = "Microscope: SFL-NGB-EQP-268";
         private const string OVEN = "Oven:SFL-NGB-EQP-164";
         private const string BALANCE = "Balance:SFL-NGB-EQP-061";
         private const string WATER_BATH = "Water bath:SFL-NGB-EQP-046";
@@ -1821,9 +1859,24 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 Oven = isMultiple ? OVEN : string.Empty,                                     // O23
                 Balance = isMultiple ? BALANCE : string.Empty,                               // R23
                 WaterBath = isMultiple ? SelectWaterBath(orderedFiberNames) : string.Empty,  // L24
-                Shaker = isMultiple ? SelectShaker(orderedFiberNames) : string.Empty         // O24
+                Shaker = isMultiple ? SelectShaker(orderedFiberNames) : string.Empty,        // O24
+                // 纤维素 / 再生纤维素父槽 → 末位再挂一台显微镜。
+                // 判据只看**父槽字面量本身**（GetOrderedFiberNames 不下钻子层），
+                // 与是否多组分无关 —— 老实现也是这么判的。
+                MicroscopeCellulosic = HasCellulosicParentSlot(orderedFiberNames)
+                    ? MICROSCOPE_CELLULOSIC
+                    : string.Empty
             };
         }
+
+        /// <summary>
+        /// 列表里有没有纤维素 / 再生纤维素父槽字面量 —— 决定末位那台 268 加不加。
+        /// 精确等值、忽略大小写与首尾空白；**不下钻子纤维**（子层里有个 Cotton 不算）。
+        /// </summary>
+        private static bool HasCellulosicParentSlot(List<string> orderedFiberNames)
+            => orderedFiberNames.Any(f =>
+                string.Equals(f.Trim(), "*cellulosic fibre", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(f.Trim(), "*Regenerated cellulose fibre", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>L24 — 水浴设备选择（P130/P131 规则）</summary>
         private string SelectWaterBath(List<string> fibers)

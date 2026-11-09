@@ -1,5 +1,6 @@
 ﻿using NX_lims_Softlines_Command_System.src.Application.Interface.FiberTeamContext;
 using NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.IngredientAnalysis;
+using NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.IngredientAnalysis.Enums;
 using NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.IngredientAnalysis.ValueObj;
 using NX_lims_Softlines_Command_System.src.Domain.Share.DependencyInject;
 using NX_lims_Softlines_Command_System.src.Infrastructure.Data.Repository;
@@ -78,9 +79,24 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
 
             // 数组/嵌套结构：留空，后续单独处理
             // 领域层给的是整行 `65.0% Cotton` / 单组分 `a:  100% Modal`，这里按第一个 % 切开。
+            //
+            // **单组分改按冒号切**（2026-11-09 修改）：单组分那两列是
+            // 「测点 | 百分比 + 成分名」，不是「百分比 | 成分名」——
+            // `a:  100% Modal` → (`a:`, `100% Modal`)。模板不动，只换切点。
+            // ⚠️ 书签名 `TestResultper_N`（per = percent）是历史命名，**不要**按名字去理解内容：
+            // 单组分时它装的是测点，多组分时才是百分比。
+            bool singleComponent = analysisResult.ComponentType == AnalysisType.Single.ToString();
             var results = analysisResult.Results;
             for (int i = 0; i < results.Count; i++)
             {
+                if (singleComponent)
+                {
+                    var (point, result) = SplitSingleResultLine(results[i]);
+                    flatData[$"TestResultper_{i + 1}"] = point;
+                    flatData[$"TestResult_{i + 1}"] = result;
+                    continue;
+                }
+
                 var (percent, name) = SplitFiberResultLine(results[i]);
                 flatData[$"TestResultper_{i + 1}"] = percent;
                 flatData[$"TestResult_{i + 1}"] = name;
@@ -93,6 +109,14 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
                 var recommendations = analysisResult.Recommendation;
                 for (int i = 0; i < recommendations.Count; i++)
                 {
+                    if (singleComponent)
+                    {
+                        var (point, recommendation) = SplitSingleResultLine(recommendations[i]);
+                        flatData[$"Recommendationper_{i + 1}"] = point;
+                        flatData[$"Recommendation_{i + 1}"] = recommendation;
+                        continue;
+                    }
+
                     var (percent, name) = SplitFiberResultLine(recommendations[i]);
                     flatData[$"Recommendationper_{i + 1}"] = percent;
                     flatData[$"Recommendation_{i + 1}"] = name;
@@ -107,14 +131,17 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
             }
 
 
-            // 设备选型字段 — 拼接所有非空设备值
+            // 设备选型字段 — 拼接所有非空设备值。
+            // 末位那台显微镜（268）只在纤维素 / 再生纤维素父槽出现时才有值，
+            // 印在**整串后面**，不是并进 Microscope 那格。
             var equipmentParts = new[]
             {
                 analysisResult.Equipment_Microscope,
                 analysisResult.Equipment_Oven,
                 analysisResult.Equipment_Balance,
                 analysisResult.Equipment_WaterBath,
-                analysisResult.Equipment_Shaker
+                analysisResult.Equipment_Shaker,
+                analysisResult.Equipment_MicroscopeCellulosic
             }.Where(e => !string.IsNullOrWhiteSpace(e));
             flatData["Equipment"] = string.Join("    ", equipmentParts);
 
@@ -377,6 +404,31 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
                 return (string.Empty, text);
 
             return (text[..(pct + 1)].TrimEnd(), text[(pct + 1)..].Trim());
+        }
+
+        /// <summary>
+        /// 单组分结果行按**冒号**切开：`a:  100% Modal` → (`a:`, `100% Modal`)。
+        /// </summary>
+        /// <remarks>
+        /// 模板那两列在单组分下是「**测点 | 百分比 + 成分名**」（2026-11-09 修改），
+        /// 不是多组分那种「百分比 | 成分名」—— 所以切点从第一个 `%` 挪到第一个 `:`。
+        /// 冒号后那两个空格是外观约定（Arial 下两个空格才等于一个数字宽），
+        /// 留在`测点`尾部没有意义（右对齐时会被吃掉视觉），这里直接剥掉，
+        /// 两格之间的间隔交给单元格自身的左右边距。
+        ///
+        /// 没有冒号的行（外部/历史输入）退回 <see cref="SplitFiberResultLine"/>：
+        /// 领域层单组分恒产出 `{Sample}:  100% {Name}`，这条只防万一。
+        /// </remarks>
+        internal static (string Point, string Result) SplitSingleResultLine(string line)
+        {
+            string text = (line ?? string.Empty).Trim();
+
+            // 分隔冒号 = **第一个 % 之前最后一个冒号**：测点名万一带冒号（`A:1`）也不会切错
+            int pct = text.IndexOf('%');
+            int colon = pct >= 0 ? text.LastIndexOf(':', pct) : text.IndexOf(':');
+            if (colon < 0) return SplitFiberResultLine(text);
+
+            return (text[..(colon + 1)], text[(colon + 1)..].Trim());
         }
 
         /// <summary>
