@@ -259,8 +259,10 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             // 页脚 MR 汇总，全都从 UseChineseNames 这一个布尔分流，不各判各的。
             result = result.WithChineseNames(_fiberChineseNames, FiberChineseName.IsChineseReport(standard));
 
-            // 3.7) 燃烧法分类（对应 ISO 11827 Table A.1）
-            result = result.WithBurningTest(orderedFiberNames);
+            // 3.7) 燃烧法 —— 取 ISO/TR 11827:2012 表 A.1 的**气味列**（一纤维一行），
+            // 不是标准里不存在的 Paper / Feather / Black Smoke 三桶（那是 burn-test 速记法）。
+            // 名单与上面的 orderedFiberNames 同源同序，只对复组分行下钻到组分子纤维。
+            result = result.WithBurningTest(GetOrderedFiberNamesForBurning());
 
             // 4) 计算标签/备注
             var calculatedRemarkResult = GenerateRecommendedLabel(RemarkGroup, calculatedFiberResult, standard);
@@ -749,9 +751,15 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// <summary>
         /// 这一行是不是「纤维素父槽」—— 报告里按子纤维展开的那两条（普通 / 再生）。
         /// 闸门按名字判，与结果表 <see cref="ExtractComponents"/> 的展开口径同源，别各判各的。
+        ///
+        /// <para>
+        /// 判据搬进 <see cref="FiberRowSlot"/>（2026-11-10）：显微镜图名单要用**同一个**闸门，
+        /// 否则残留在非父槽行上的子纤维会有图、结果表里却没有这个成分。这里保留方法名当薄壳，
+        /// 调用点一个不动。
+        /// </para>
         /// </summary>
         private static bool IsCellulosicParent(string? fiberName)
-            => fiberName == "*cellulosic fibre" || fiberName == "*Regenerated cellulose fibre";
+            => FiberRowSlot.IsCellulosicParentSlot(fiberName);
 
         /// <summary>父槽下真正要展开的子纤维（名字非空、占比 &gt; 0）。</summary>
         private static List<CellulosicSubFiber> ExpandedCellulosicSubFibers(MultiFiberRowUnit row)
@@ -1616,8 +1624,11 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             return string.Join("/", dissolvedNames.Concat(splittingNames).Distinct());
         }
 
+        /// <summary>
+        /// 这一行是不是复组分行。判据与显微镜图名单共用 —— 见 <see cref="FiberRowSlot"/> 的类注释。
+        /// </summary>
         private static bool IsBicomponentFiber(string name) =>
-            name is "Bicomponent Fiber" or "Biconstituent Fiber";
+            FiberRowSlot.IsBicomponentSlot(name);
 
         /// <summary>
         /// 双组分父行的**总重**（逐试次）。
@@ -1960,6 +1971,72 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             }
 
             return names;
+        }
+
+        /// <summary>
+        /// 燃烧法专用名单 —— 与 <see cref="GetOrderedFiberNames"/> **同一套遍历与排序键**
+        /// （拆分列按 <see cref="SplittingFiberComponent.SplittingOrder"/> 在前，
+        /// 溶解列按 <see cref="MultiDissolvedUnit.DissolutionStep"/> 在后），
+        /// 唯一多出来的一步是：**复组分行下钻到那两个组分子纤维**。
+        ///
+        /// <para>
+        /// 为什么只下钻复组分：`Bicomponent Fiber` / `Biconstituent Fiber` 是占位名，
+        /// ISO/TR 11827 表 A.1 里没有这两行；真实成分是它下面那两个子纤维
+        /// （涤纶 + 锦纶），气味各不同，所以必须拆开印。
+        /// 真实期 19 + 56 条记录在本批之前这条成分被静默丢弃。
+        /// </para>
+        ///
+        /// <para>
+        /// 为什么**不**下钻 `*cellulosic fibre` 父槽：那三个父槽名在表 A.1 里就对应
+        /// Burnt paper，子纤维也全是纤维素 —— 展开只是把同一句话再印几遍。
+        /// </para>
+        ///
+        /// <para>
+        /// 闸门与显微镜图名单、结果表同源（<see cref="FiberRowSlot.IsBicomponentSlot"/> +
+        /// 恰好 2 条 + 至少一条有称量值）：残留在**普通行**上的子纤维（改成分没清子行 /
+        /// 回填老草稿）不该凭空印出气味。不下钻的名字由 <see cref="BurningOdour"/> 自然丢弃。
+        /// </para>
+        /// </summary>
+        private List<string> GetOrderedFiberNamesForBurning()
+        {
+            // 单组分没有拆分/溶解列，也就没有子纤维
+            if (Type == AnalysisType.Single)
+                return GetOrderedFiberNames();
+
+            var names = new List<string>();
+
+            // 拆分列先、溶解列后 —— 与 GetOrderedFiberNames 用**同一组 OrderBy 键**
+            foreach (var s in Components.OfType<SplittingFiberComponent>().OrderBy(s => s.SplittingOrder))
+            {
+                names.AddRange(ExpandForBurning(s.FiberName, s.BicomponentSubFibers));
+            }
+
+            foreach (var d in Components.OfType<DissolvedFiberComponent>())
+            {
+                foreach (var unit in d.DissolutionUnits.OrderBy(u => u.DissolutionStep))
+                {
+                    names.AddRange(ExpandForBurning(unit.FiberName, unit.BicomponentSubFibers));
+                }
+            }
+
+            return names;
+        }
+
+        /// <summary>
+        /// 复组分行 → 两个子纤维名；其余情况原值返回（见 <see cref="GetOrderedFiberNamesForBurning"/>）。
+        /// 子行的 GSMTrail 是 decimal、父行的 float，这里只做大于 0 的判定，不参与计算。
+        /// </summary>
+        private static IEnumerable<string> ExpandForBurning(string name, List<BicomponentSubFiber> subFibers)
+        {
+            if (FiberRowSlot.IsBicomponentSlot(name) && subFibers is { Count: 2 }
+                && subFibers.Any(s => s.GSMTrail1 > 0 || s.GSMTrail2 > 0))
+            {
+                return subFibers
+                    .Where(s => !string.IsNullOrWhiteSpace(s.FiberName))
+                    .Select(s => s.FiberName);
+            }
+
+            return new[] { name };
         }
 
         /// <summary>

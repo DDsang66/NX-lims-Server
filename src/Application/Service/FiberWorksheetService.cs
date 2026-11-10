@@ -525,6 +525,14 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
 
         /// <summary>
         /// 一行（父行 + 其下展示子行）的纤维名，顺序即称量表行序：父行在前、子行按录入顺序在后。
+        ///
+        /// <para>
+        /// **子行要过与结果表同一套闸门**：
+        /// 图名单只判名字非空、结果表却按 <see cref="FiberRowSlot"/> 展开 ——
+        /// 残留在**非父槽行**上的子纤维（改成分没清子行、回填老草稿、行间搬数据）
+        /// 就会"有图、结果表里没有这个成分"。子行插不进结果表的几种情形，这里同样不印：
+        /// 非父槽行挂的纤维素子行、占比为 0 的子行、条数不是 2 或全没称量值的复组分子行。
+        /// </para>
         /// </summary>
         private static IEnumerable<string> RowFiberNames(FiberComponent component)
         {
@@ -558,13 +566,20 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
             if (!string.IsNullOrWhiteSpace(fiberName))
                 yield return fiberName;
 
-            foreach (var sub in cellulosicSubFibers ?? Array.Empty<CellulosicSubFiber>())
-                if (!string.IsNullOrWhiteSpace(sub.FiberName))
-                    yield return sub.FiberName;
+            // 纤维素子行：闸门与结果表的 ExpandedCellulosicSubFibers 一致（父槽名 + 占比 > 0）
+            if (FiberRowSlot.IsCellulosicParentSlot(fiberName))
+                foreach (var sub in cellulosicSubFibers ?? Array.Empty<CellulosicSubFiber>())
+                    if (!string.IsNullOrWhiteSpace(sub.FiberName) && sub.Percentage > 0)
+                        yield return sub.FiberName;
 
-            foreach (var sub in bicomponentSubFibers ?? Array.Empty<BicomponentSubFiber>())
-                if (!string.IsNullOrWhiteSpace(sub.FiberName))
-                    yield return sub.FiberName;
+            // 复组分子行：闸门与 PostProcessBicomponent 一致（恰好 2 条，且拆得出干重）。
+            // 干重拆不出来最常见的原因是子纤维没有称量值 —— 那种行结果表不插子行。
+            if (FiberRowSlot.IsBicomponentSlot(fiberName)
+                && bicomponentSubFibers is { Count: 2 }
+                && bicomponentSubFibers.Any(s => s.GSMTrail1 > 0 || s.GSMTrail2 > 0))
+                foreach (var sub in bicomponentSubFibers)
+                    if (!string.IsNullOrWhiteSpace(sub.FiberName))
+                        yield return sub.FiberName;
         }
 
         /// <summary>

@@ -60,7 +60,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// 两个父行共用这一份清单，所以四个组合都能选到。
         ///
         /// **加它对计算是零漂移**：<c>LookupMoistureRegain</c> 两行同值（无论按哪个标准的列）、
-        /// <c>BurningCategory</c> 同为 Black Smoke、显微镜取图本就有 Nylon→Polyamide 的别名
+        /// <c>BurningOdour</c> 两行同为 Amide、显微镜取图本就有 Nylon→Polyamide 的别名
         /// （见 <see cref="MicroscopeImageName"/>）。会变的只是报告上印出来的名字。
         /// </summary>
         internal static readonly IReadOnlyList<string> BicomponentSub = new[]

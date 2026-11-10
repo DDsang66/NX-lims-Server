@@ -173,11 +173,15 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             return new AnalysisResult(copy);
         }
 
+        /// <summary>
+        /// 写 docx 书签 <c>BurningTest</c>：每种纤维一段 <c>纤维名: 气味词</c>，逗号分隔、不换行，
+        /// 如 <c>Cotton: Burnt paper, Polyester: Faint sweet aroma</c>。气味词见 <see cref="BurningOdour"/>。
+        /// </summary>
         public AnalysisResult WithBurningTest(IEnumerable<string> fiberNames)
         {
-            var categories = BurningCategory.Classify(fiberNames);
+            var odours = BurningOdour.Describe(fiberNames);
             var copy = new Dictionary<string, object>(Data);
-            copy["BurningTest"] = string.Join(", ", categories);
+            copy["BurningTest"] = string.Join(", ", odours);
             return new AnalysisResult(copy);
         }
 
