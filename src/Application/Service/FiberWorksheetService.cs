@@ -435,6 +435,10 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         {
             var (values, redBookmarks, removeWhenEmpty, removeBlockWhenEmpty) = _wordTemplateAdapter.Adapt(result);
 
+            // 组头汇总行整行印淡灰。**必须在 SuppressWeighingBottle 之前算** ——
+            // 那一步会把称量瓶表的键删掉，之后再扫就看不见第二页那一行了。
+            var fadedBookmarks = FadedGroupHeaderBookmarks(values);
+
             if (suppressWeighingBottle)
             {
                 // 不改适配器返回的实例：调用方/测试可能留着这份输出复用。
@@ -448,7 +452,8 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
             var paragraphText = result.UseChineseNames ? FiberChineseName.ReportLabels : null;
 
             _wordTemplateEngine.ReplaceText(
-                targetPath, values, redBookmarks, removeWhenEmpty, removeBlockWhenEmpty, paragraphText);
+                targetPath, values, redBookmarks, removeWhenEmpty, removeBlockWhenEmpty, paragraphText,
+                fadedBookmarks);
 
             var imageFolder = Path.Combine("wwwroot", "MicroscopeImages");
             _wordTemplateEngine.InsertMicroscopeImages(targetPath, microscopeFibers, imageFolder);
@@ -463,6 +468,70 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
             "WeighingA", "TotalA", "sampleA",
             "WeighingB", "TotalB", "sampleB",
         };
+
+        /// <summary>
+        /// 称量表（第一页 Trial #1/#2 那张）的行书签族。名字后接 `_{行号}`，
+        /// 与适配器 <c>ExpandMultiFiberRowUnits</c> 生成的名字一一对应。
+        /// </summary>
+        private static readonly string[] TrialRowFamilies =
+        {
+            "Section", "Sum",
+            "GSMTrail1", "RateTrail1", "GSMTrail2", "RateTrail2",
+            "Avg", "Correct", "MoistureRegain", "Rate",
+        };
+
+        /// <summary>
+        /// 要印**淡灰**的书签名：溶解组的**组头汇总行**整行。
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// 组头行不是一条成分 —— 它是这一组所有成分的缩写拼接（Spandex/Polyester → `E/T`），
+        /// 克重是整组总重、占比是 100% 起始行。它与下面几行长得一模一样，印成黑的会被当成
+        /// 一条真实纤维读，所以整行淡化以示区分（用户 2026-11-10 要求）。
+        /// </para>
+        /// <para>
+        /// 判据与领域层、适配器结果表/页脚那几处**同一个**：<see cref="MultiFiberRowUnit.Sum"/>
+        /// 含 `/`。不是靠"这一行数值特殊"去猜 —— 组内的数值随配方怎么变都可能撞上。
+        /// 这里扫的是**已经拍平的书签字典**，所以行号直接来自键名，不用另算一套下标。
+        /// </para>
+        /// <para>
+        /// 两张表都收：同一行在第一页的称量表与第二页的称量瓶表各出现一次，
+        /// 只淡化一张会看起来像漏了。称量瓶表那些键在 <see cref="SuppressWeighingBottle"/>
+        /// 之后就不存在了，多收几个名字不会被引擎报错（找不到书签就跳过）。
+        /// </para>
+        /// </remarks>
+        internal static HashSet<string> FadedGroupHeaderBookmarks(Dictionary<string, string> values)
+        {
+            var faded = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var kv in values)
+            {
+                var value = kv.Value;
+                if (string.IsNullOrEmpty(value) || !value.Contains('/')) continue;
+
+                // 称量表：`Sum_{n}` 就是组头行那串缩写
+                if (kv.Key.StartsWith("Sum_", StringComparison.Ordinal))
+                {
+                    var row = kv.Key["Sum_".Length..];
+                    if (row.Length == 0 || !row.All(char.IsDigit)) continue;
+
+                    foreach (var family in TrialRowFamilies)
+                        faded.Add($"{family}_{row}");
+                    continue;
+                }
+
+                // 称量瓶表：`Component{n}` 与 Sum 同值（同一行）。行号取它**自己的**键名 ——
+                // 这张表跳过展示子行，所以有子行时两张表的行号是岔开的，不能互相套用。
+                if (IsIndexedBookmark(kv.Key, "Component"))
+                {
+                    var row = kv.Key["Component".Length..];
+                    foreach (var family in WeighingBottleFamilies)
+                        faded.Add($"{family}{row}");
+                }
+            }
+
+            return faded;
+        }
 
         /// <summary>
         /// 剪枝用的哨兵书签：它一定在称量瓶表里，且表里必然有它。

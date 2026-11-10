@@ -41,7 +41,13 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine
         /// 用 —— 它们换不了"值"，只能整段换掉。传 null（缺省）则一个段落都不动。
         /// 见 <see cref="ReplaceParagraphTexts"/>。
         /// </param>
-        public void ReplaceText(string filePath, Dictionary<string, string> bookmarkValues, HashSet<string>? redBookmarks = null, HashSet<string>? removeWhenEmpty = null, HashSet<string>? removeBlockWhenEmpty = null, IReadOnlyDictionary<string, string>? replaceParagraphText = null)
+        /// <param name="fadedBookmarks">
+        /// 印**淡灰**的书签名（成分报告里组头汇总行那种"不是一条真实成分"的行，
+        /// 靠颜色与下面的成分子行区分开）。与 <paramref name="redBookmarks"/> 是两套颜色，
+        /// 同时命中时**红优先**（红色是"平行样差异过大"的警示，不能被淡灰吃掉）。
+        /// 参数排在最后，是为了不挪动既有调用点的位置参数。
+        /// </param>
+        public void ReplaceText(string filePath, Dictionary<string, string> bookmarkValues, HashSet<string>? redBookmarks = null, HashSet<string>? removeWhenEmpty = null, HashSet<string>? removeBlockWhenEmpty = null, IReadOnlyDictionary<string, string>? replaceParagraphText = null, HashSet<string>? fadedBookmarks = null)
         {
             if (bookmarkValues == null || !bookmarkValues.Any()) return;
 
@@ -70,14 +76,14 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine
 
                 // 正文部件
                 GrowIndexedRows(doc.MainDocumentPart!, bookmarkValues);
-                ReplaceBookmarksInPart(doc.MainDocumentPart!, bookmarkValues, redBookmarks, removeWhenEmpty, removeBlockWhenEmpty);
+                ReplaceBookmarksInPart(doc.MainDocumentPart!, bookmarkValues, redBookmarks, removeWhenEmpty, removeBlockWhenEmpty, fadedBookmarks);
                 doc.MainDocumentPart.Document!.Save();
 
                 // 页眉
                 foreach (var headerPart in doc.MainDocumentPart!.HeaderParts)
                 {
                     GrowIndexedRows(headerPart, bookmarkValues);
-                    ReplaceBookmarksInPart(headerPart, bookmarkValues, redBookmarks, removeWhenEmpty, removeBlockWhenEmpty);
+                    ReplaceBookmarksInPart(headerPart, bookmarkValues, redBookmarks, removeWhenEmpty, removeBlockWhenEmpty, fadedBookmarks);
                     headerPart.Header?.Save();
                 }
 
@@ -85,7 +91,7 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine
                 foreach (var footerPart in doc.MainDocumentPart.FooterParts)
                 {
                     GrowIndexedRows(footerPart, bookmarkValues);
-                    ReplaceBookmarksInPart(footerPart, bookmarkValues, redBookmarks, removeWhenEmpty, removeBlockWhenEmpty);
+                    ReplaceBookmarksInPart(footerPart, bookmarkValues, redBookmarks, removeWhenEmpty, removeBlockWhenEmpty, fadedBookmarks);
                     footerPart.Footer?.Save();
                 }
             }
@@ -302,7 +308,7 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine
         /// 在指定部件中替换书签
         /// 优先在原有 Run/Text 上就地替换以保留样式；若不存在则寻找局部最近的 RunProperties 并克隆；最后才插入无样式 Run。
         /// </summary>
-        private void ReplaceBookmarksInPart(OpenXmlPart part, Dictionary<string, string> bookmarkValues, HashSet<string>? redBookmarks, HashSet<string>? removeWhenEmpty, HashSet<string>? removeBlockWhenEmpty)
+        private void ReplaceBookmarksInPart(OpenXmlPart part, Dictionary<string, string> bookmarkValues, HashSet<string>? redBookmarks, HashSet<string>? removeWhenEmpty, HashSet<string>? removeBlockWhenEmpty, HashSet<string>? fadedBookmarks = null)
         {
             var bookmarks = part.RootElement!.Descendants<BookmarkStart>()
                 .Where(b => bookmarkValues.ContainsKey(b.Name!))
@@ -346,9 +352,11 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine
                         t.Remove();
                     TextRunHelper.InsertTextWithLineBreaks(bookmarkValues[bookmark.Name], existingRunWithText);
 
-                    // 标红：检查是否在 redBookmarks 中
+                    // 上色：先淡灰、后标红 —— 两者同时命中时红优先（红是警示，不能被灰吃掉）
+                    if (fadedBookmarks != null && fadedBookmarks.Contains(bookmark.Name))
+                        ApplyColor(existingRunWithText, FadedColorHex);
                     if (redBookmarks != null && redBookmarks.Contains(bookmark.Name))
-                        ApplyRedColor(existingRunWithText);
+                        ApplyColor(existingRunWithText, RedColorHex);
 
                     // 删除书签范围内除保留的 run 之外的其他元素
                     foreach (var elem in contentElements.ToList())
@@ -370,8 +378,10 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine
                     var newRun = new Run(nearestRunProps.CloneNode(true) as RunProperties);
                     InsertRunAfterBookmark(bookmark, newRun);
                     TextRunHelper.InsertTextWithLineBreaks(bookmarkValues[bookmark.Name], newRun);
+                    if (fadedBookmarks != null && fadedBookmarks.Contains(bookmark.Name))
+                        ApplyColor(newRun, FadedColorHex);
                     if (redBookmarks != null && redBookmarks.Contains(bookmark.Name))
-                        ApplyRedColor(newRun);
+                        ApplyColor(newRun, RedColorHex);
                 }
                 else
                 {
@@ -379,23 +389,34 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine
                     var newRun = new Run();
                     InsertRunAfterBookmark(bookmark, newRun);
                     TextRunHelper.InsertTextWithLineBreaks(bookmarkValues[bookmark.Name], newRun);
+                    if (fadedBookmarks != null && fadedBookmarks.Contains(bookmark.Name))
+                        ApplyColor(newRun, FadedColorHex);
                     if (redBookmarks != null && redBookmarks.Contains(bookmark.Name))
-                        ApplyRedColor(newRun);
+                        ApplyColor(newRun, RedColorHex);
                 }
             }
         }
 
+        /// <summary>标红：平行样差异过大。</summary>
+        private const string RedColorHex = "FF0000";
+
         /// <summary>
-        /// 将 Run 的字体颜色设为红色（FF0000）
+        /// 淡灰：组头汇总行（`E/T` 这种缩写串）整行印灰，与真实成分子行区分。
+        /// 取 50% 灰（808080）—— 再淡在 8pt 下就快看不清了。
         /// </summary>
-        private static void ApplyRedColor(Run run)
+        private const string FadedColorHex = "808080";
+
+        /// <summary>
+        /// 将 Run 的字体颜色设为指定色值（六位十六进制，不带 #）
+        /// </summary>
+        private static void ApplyColor(Run run, string colorHex)
         {
             run.RunProperties ??= new RunProperties();
             var color = run.RunProperties.Elements<Color>().FirstOrDefault();
             if (color != null)
-                color.Val = "FF0000";
+                color.Val = colorHex;
             else
-                run.RunProperties.Append(new Color { Val = "FF0000" });
+                run.RunProperties.Append(new Color { Val = colorHex });
         }
 
         /// <summary>
