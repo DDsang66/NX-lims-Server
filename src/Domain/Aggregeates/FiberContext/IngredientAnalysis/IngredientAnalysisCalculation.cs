@@ -301,13 +301,10 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         private List<CalculatedFiberResult> CalculateMultipleComponents(IEnumerable<DissolvedFiberComponent> dissolveds, IEnumerable<SplittingFiberComponent> splittings)
         {
             // 1) 计算样品总干重（所有拆分列 + 所有溶解列的原始干重）
-            //    每个溶解组独立 fallback：若 OriginalGSM 未填，取该组第一溶解行 GSM
-            var dissolvedT1 = dissolveds.Sum(d => d.OriginalGSMTrail1 > 0
-                ? (decimal)d.OriginalGSMTrail1
-                : (decimal)(d.DissolutionUnits?.FirstOrDefault()?.GSMTrail1 ?? 0));
-            var dissolvedT2 = dissolveds.Sum(d => d.OriginalGSMTrail2 > 0
-                ? (decimal)d.OriginalGSMTrail2
-                : (decimal)(d.DissolutionUnits?.FirstOrDefault()?.GSMTrail2 ?? 0));
+            //    每个溶解组独立 fallback：若 OriginalGSM 未填，取该组第一溶解行 GSM ——
+            //    首行是复合纤维父行时取**父行总重**（父行没填才按子行取，见 DissolvedGroupStartGsm）。
+            var dissolvedT1 = dissolveds.Sum(d => DissolvedGroupStartGsm(d).Trail1);
+            var dissolvedT2 = dissolveds.Sum(d => DissolvedGroupStartGsm(d).Trail2);
             var totalGSMTrail1 = splittings.Sum(s => (decimal)s.GSMTrail1) + dissolvedT1;
             var totalGSMTrail2 = splittings.Sum(s => (decimal)s.GSMTrail2) + dissolvedT2;
 
@@ -412,8 +409,10 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 int componentCount = groupUnits.Count;
 
                 // 起始行 GSM：有 originalGSM 则用它，否则用第一条 dissolved row 的 GSM
-                var startGsm1 = group.OriginalGSMTrail1 > 0 ? (decimal)group.OriginalGSMTrail1 : (decimal)groupUnits[0].GSMTrail1;
-                var startGsm2 = group.OriginalGSMTrail2 > 0 ? (decimal)group.OriginalGSMTrail2 : (decimal)groupUnits[0].GSMTrail2;
+                //（首行是复合纤维父行时取父行总重：父行没填才按子行取，与总量那一处同源）
+                var startGsm = DissolvedGroupStartGsm(group);
+                var startGsm1 = startGsm.Trail1;
+                var startGsm2 = startGsm.Trail2;
 
                 // 计算所有成分缩写拼接
                 var abbreviations = groupUnits.Select(u => GetFiberAbbreviation(u.FiberName)) .ToList();
@@ -465,8 +464,12 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                     ownGsm2 = curGsm2 - nextGsm2;
 
                     // rate = (own / firstRowGsm) * (startGsm / total) * 100
-                    var firstRowGsm1 = (decimal)groupUnits[0].GSMTrail1;
-                    var firstRowGsm2 = (decimal)groupUnits[0].GSMTrail2;
+                    // 首行是复合纤维父行时取父行总重（裸值常常是 0，父行没填才按子行取，见 DissolvedGroupStartGsm）。
+                    var firstRow = ResolveBicomponentParentGsm(
+                        groupUnits[0].GSMTrail1, groupUnits[0].GSMTrail2,
+                        groupUnits[0].BicomponentSubFibers);
+                    var firstRowGsm1 = firstRow.Trail1;
+                    var firstRowGsm2 = firstRow.Trail2;
                     var rateTrail1 = totalGSMTrail1 == 0 || firstRowGsm1 == 0
                         ? 0m : ownGsm1 / firstRowGsm1 * (startGsm1 / totalGSMTrail1) * 100m;
                     var rateTrail2 = totalGSMTrail2 == 0 || firstRowGsm2 == 0
@@ -922,6 +925,11 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                         RoundedRate = rounded[maxIdx].RoundedRate - 1m };
                 }
             }
+
+            // 一个成分都提不出来：脏数据（如克重全 0），或 AATCC 把每一行都折进 other 而
+            // otherSum 恰为 0 以致连聚合行都没产生。这里直接交空列表 —— 报告侧少印一行，
+            // 但不能让下面的 .First() 抛，一处脏数据不该把整份报告生成打挂（真实期 23 条踩过）。
+            if (rounded.Count == 0) return new List<string>();
 
             // 3. 计算总和
             var sum = rounded.Sum(r => r.RoundedRate);
@@ -1657,6 +1665,30 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             if (trail2 <= 0 || trail2 < residueGsm2) trail2 = subs.Sum(s => s.GSMTrail2);
 
             return (trail1, trail2);
+        }
+
+        /// <summary>
+        /// 溶解组的**起始重**（逐试次）：填了 `originalGSM` 就用它，否则取组内首行。
+        ///
+        /// 首行本身也走 <see cref="ResolveBicomponentParentGsm"/> —— 组内首行可能就是
+        /// 复合纤维父行，而父行常常没有自己的称量值（只录在两条子纤维上）。
+        /// 取的是**父行总重**，不是"子纤维之和"：父行有值就用父行（绝大多数记录），
+        /// 只有父行为 0 或小于残留时才退化成子行之"和"（那是该函数的兜底口径，见它的注释）。
+        /// 2026-11-10 之前这里直接取 `groupUnits[0].GSMTrail1` 的裸值，于是一份「父行 0 +
+        /// 子行有重」的记录起始重读成 0，`rateTrail` 被 `== 0` 守卫折成 0、整份 Rate 全 0，
+        /// AATCC 的亚 5% 聚合再把空列表喂给 `.First()` 直接抛异常。
+        ///
+        /// 两个试次**各自 fallback**（与原逻辑同形）：Trial 1 没填不代表 Trial 2 也没填。
+        /// </summary>
+        private static (decimal Trail1, decimal Trail2) DissolvedGroupStartGsm(DissolvedFiberComponent d)
+        {
+            var first = d.DissolutionUnits?.FirstOrDefault();
+            var resolved = first == null
+                ? (Trail1: 0m, Trail2: 0m)
+                : ResolveBicomponentParentGsm(first.GSMTrail1, first.GSMTrail2, first.BicomponentSubFibers);
+
+            return (d.OriginalGSMTrail1 > 0 ? (decimal)d.OriginalGSMTrail1 : resolved.Trail1,
+                    d.OriginalGSMTrail2 > 0 ? (decimal)d.OriginalGSMTrail2 : resolved.Trail2);
         }
 
         /// <summary>

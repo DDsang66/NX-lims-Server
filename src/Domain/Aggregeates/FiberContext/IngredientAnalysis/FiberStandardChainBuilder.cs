@@ -18,8 +18,11 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
     ///     前缀 —— .3 已改由 FZ/T 01057 系列名展开落到链首（见 FZ01057_* 常量），留着就重复了。
     ///     四个分部一律 **2007 版**：.2/.3 的 2025 版 2027-05-01 才实施，届时才换。
     ///   · ISO 侧：-1（试验通则，不是纤维对的定量方法）改 -20；-22 上移到 -6 之前；
-    ///     -6 按官方范围收紧；补 flax（不补 ramie，1833-22:2020 只有 flax）
-    ///   · GB 侧：删除"聚酯在前一律给 2910.24"的兜底，换成涤氨双向 2910.20；补纤维素 × 弹性纤维 2910.20
+    ///     -6 按官方范围收紧；补 flax（不补 ramie，1833-22:2020 只有 flax）。
+    ///     **-22 只在二元混合物里出现**（2026-11-10）：它的官方范围逐字写 "binary mixtures"，
+    ///     成分数 ≥3 时链里不列它 —— 见 ISO 分支里那条 `part == 22 && count >= 3` 的拦截。
+    ///   · GB 侧：删除"聚酯在前一律给 2910.24"的兜底，换成涤氨双向 2910.20；补纤维素 × 弹性纤维 2910.20；
+    ///     **`2910.22` 与 ISO 侧同一条二元限制** —— ≥3 组分不列（MOD 采标的范围同样是 binary mixtures）
     ///   · 丙烯腈三处裸字面量（ISO -12、GB .12、设备选型）统一走 <see cref="FiberTokens.IsAcrylicType"/>
     ///   · -12 / .12 三条兜底的后位判据由"在 1833-12 范围内"（对象 ∪ 其他，并集）收紧成
     ///     <see cref="FiberTokens.IsIso1833_12OtherFibre"/>（**只有"其他纤维"**）：两栏本就互斥，
@@ -518,6 +521,14 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 {
                     if (ResolveIsoPart(first, second, hasAcrylic) is not int part) continue;
 
+                    // **-22 只服务二元混合物**：1833-22:2020 的范围原话是 "binary mixtures of
+                    // viscose or certain types of cupro or modal or lyocell with flax fibres"，
+                    // 三个及以上组分是多段分析，不引这一分部（用户 2026-11-10 裁定）。
+                    //
+                    // 只在这里拦，**不动 ResolveIsoPart**：查表是"这一对纤维适合哪个分部"的
+                    // 成对口径（pair-coverage golden 钉着它），组分数的判断属于"链要不要引"。
+                    if (part == 22 && count >= 3) continue;
+
                     // 2C 下这个分部落空（资质列写 `/`）→ 直接跳过，不让它占位。
                     var s = RenderIsoSub(fam, mode, part);
                     if (s.Length == 0) continue;
@@ -580,6 +591,10 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                     foreach (var (first, second) in EnumeratePairs(slots))
                     {
                         if (ResolveGbPart(first, second, hasAcrylic) is not int part) continue;
+
+                        // 与 ISO 侧同一条：`GB/T 2910.22` 是 ISO 1833-22:2009 的 MOD 采标，
+                        // 官方范围同样是**二元混合物**，成分数 ≥3 时链里不列它（2026-11-10 用户裁定）。
+                        if (part == 22 && count >= 3) continue;
 
                         // 2C 下这个分部落空（`2910.22`）→ 跳过，不让它占位。
                         var s = GbPartOf(mode, part);
