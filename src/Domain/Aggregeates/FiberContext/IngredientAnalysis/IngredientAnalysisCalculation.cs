@@ -673,10 +673,15 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// </summary>
         /// <remarks>
         /// <para>
-        /// 纯展示，与 <see cref="AppendCellulosicSubRows"/> 同一套约束：没有称量值
-        /// （GSMTrail / RateTrail / Avg / Correct 全 0），<see cref="MultiFiberRowUnit.Rate"/>
-        /// 只是父行印出的 Rate 按**拆干质量**切出来的一份，不参加 Rate 分母、
+        /// 纯展示，与 <see cref="AppendCellulosicSubRows"/> 同一套约束：不参加 Rate 分母、
         /// 也不进结果表与成分数（那两处都跳过 <see cref="MultiFiberRowUnit.IsDisplaySubRow"/>）。
+        /// <see cref="MultiFiberRowUnit.Rate"/> 只是父行印出的 Rate 按**拆干质量**切出来的一份。
+        /// </para>
+        /// <para>
+        /// **Trial #1/#2 印子纤维各自录入的克重**（2026-11-11 用户裁定）：原样透传
+        /// <see cref="BicomponentSubFiber.GSMTrail1"/> / <see cref="BicomponentSubFiber.GSMTrail2"/>，
+        /// 不做换算 —— 即使「子行一 = 父行副本」那种录法会印出与父行相同的数。
+        /// 其余列（RateTrail / Avg / Correct）仍空。<b>只是加印，不参与任何算术。</b>
         /// </para>
         /// <para>
         /// 份额必须与 Test Result 括号里的百分比同源 —— 直接复用 <see cref="DecomposeBicomponent"/>：
@@ -739,6 +744,9 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                             // Section 沿用父行 —— 适配器去重后这一格自然留空，称量瓶表那边会整行过滤掉
                             Section = row.Section,
                             Sum = subs[i].FiberName,
+                            // Trial #1/#2 印**各自录入的克重**（原样，不做换算）。
+                            GSMTrail1 = subs[i].GSMTrail1,
+                            GSMTrail2 = subs[i].GSMTrail2,
                             MoistureRegain = moistureRegain ?? 0m,
                             MoistureRegainKnown = moistureRegain is not null,
                             Rate = rate,
@@ -1008,7 +1016,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
 
         /// <summary>
         /// 金属镀膜纤维显示名：`AsEntered` 照录入原样，
-        /// `MetallisedFibre` 印英式单数（ISO 用），`MetallizedFibres` 印美式复数（国标 / AATCC 用）。
+        /// `MetallisedFibre` 印英式单数（ISO / AATCC 用），`MetallizedFibres` 印美式复数（国标用）。
         /// 只影响印出来的名字，不进任何取值/排序/聚合的键。
         /// </summary>
         private enum MetallizedNaming
@@ -1126,7 +1134,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
 
                 if (isAatcc)
                     return new ReportFiberNaming(LinenFlaxNaming.Linen, ElastaneNaming.AsEntered, MetalNaming.Metal,
-                        MetallizedNaming.MetallizedFibres,
+                        MetallizedNaming.MetallisedFibre,
                         ElastodieneNaming.Rubber, PolyamideNaming.AsEntered, ViscoseNaming.AsEntered,
                         RegeneratedNaming.AsEntered);
 
@@ -1154,9 +1162,15 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
 
             /// <summary>
             /// 只改名，不做中文化。七条规则各管各的纤维名，先后无影响。
+            ///
+            /// 最前面先把 **ISO 专用锦纶**（`Nylon (ISO 6.25%)` / `Polyamide (ISO 6.25%)`）
+            /// 归一成 `Nylon` / `Polyamide` —— 那是下拉里的区分标识，报告上一律印原名。
+            /// 归一放在最前，下面国标那条「Polyamide」规则才吃得到它。
             /// </summary>
             public string Apply(string name)
             {
+                name = FiberTokens.DisplayBaseName(name);
+
                 if (Metal != MetalNaming.AsEntered && FiberTokens.IsMetalFibre(name))
                     return "Metal";
 
@@ -1593,9 +1607,14 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             return string.Join("  ",
                 _components
                     .OfType<SingleFiberComponent>()
-                    .Select(c => string.IsNullOrWhiteSpace(c.Sample)
-                        ? c.FiberName
-                        : $"{c.Sample}:{c.FiberName}"));
+                    .Select(c =>
+                    {
+                        // ISO 专用锦纶两条在定性栏里也印回原名（与 Test Result 同一口径）。
+                        var name = FiberTokens.DisplayBaseName(c.FiberName);
+                        return string.IsNullOrWhiteSpace(c.Sample)
+                            ? name
+                            : $"{c.Sample}:{name}";
+                    }));
         }
 
         /// <summary>
@@ -1629,7 +1648,11 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                         ? s.CellulosicSubFibers.Where(c => !string.IsNullOrWhiteSpace(c.FiberName)).Select(c => c.FiberName)
                         : new[] { s.FiberName });
 
-            return string.Join("/", dissolvedNames.Concat(splittingNames).Distinct());
+            // ISO 专用锦纶两条归一成原名，**排在 Distinct 之前**：
+            // 与 `Nylon` 同时出现时不该在定性栏里占两个位（其它名字原样透传）。
+            return string.Join("/", dissolvedNames.Concat(splittingNames)
+                .Select(FiberTokens.DisplayBaseName)
+                .Distinct());
         }
 
         /// <summary>
@@ -1863,15 +1886,17 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         private const string SHAKER = "Shaker:SFL-NGB-EQP-052";
 
         // Shaker 触发纤维（**含有**其中任一时需化学溶解）
+        // ISO 专用锦纶两条（fiber_database 里 Iso 列 6.25 的条目）与 Nylon / Polyamide 同一根纤维，
+        // 两张表都是精确 Contains，不补就会漏摇床 / 漏水浴。
         private static readonly HashSet<string> ShakerTriggerFibers = new(StringComparer.OrdinalIgnoreCase)
         {
-            "nylon", "polyamide", "wool"
+            "nylon", "polyamide", "nylon (iso 6.25%)", "polyamide (iso 6.25%)", "wool"
         };
 
         // P130 规则：Polyester 前不允许的纤维
         private static readonly HashSet<string> ProhibitedBeforePolyester = new(StringComparer.OrdinalIgnoreCase)
         {
-            "nylon", "polyamide", "wool", "silk", "acetate"
+            "nylon", "polyamide", "nylon (iso 6.25%)", "polyamide (iso 6.25%)", "wool", "silk", "acetate"
         };
 
         /// <summary>
@@ -2033,7 +2058,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         {
             // 单组分没有拆分/溶解列，也就没有子纤维
             if (Type == AnalysisType.Single)
-                return GetOrderedFiberNames();
+                return GetOrderedFiberNames().Select(FiberTokens.DisplayBaseName).ToList();
 
             var names = new List<string>();
 
@@ -2051,7 +2076,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 }
             }
 
-            return names;
+            // ISO 专用锦纶两条 → 原名再交给 BurningOdour（表里只有 Nylon / Polyamide 两条）。
+            return names.Select(FiberTokens.DisplayBaseName).ToList();
         }
 
         /// <summary>

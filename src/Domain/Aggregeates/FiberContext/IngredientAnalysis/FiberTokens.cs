@@ -141,6 +141,9 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         {
             "cotton", "viscose", "rayon", "cupro", "modal", "lyocell",
             "polyamide", "nylon", "polyester", "polypropylene",
+            // ISO 专用锦纶两条（fiber_database 里 Iso 列 6.25 的条目）也是同一根锦纶，
+            // 见 IsIsoPolyamideVariant。
+            "polyamide (iso 6.25%)", "nylon (iso 6.25%)",
             "elastomultiester", "elastolefin", "melamine", "polyacrylate", "glass",
         };
 
@@ -175,8 +178,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             || Clean(f).Equals("metal fiber", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
-        /// 金属镀膜纤维 —— 统一拼法：ISO 印 <c>Metallised fibre</c>（英式单数），
-        /// 国标 / AATCC 印 <c>Metallized fibres</c>（美式复数）；其余标准照录入。
+        /// 金属镀膜纤维 —— 统一拼法：ISO / AATCC 印 <c>Metallised fibre</c>（英式单数），
+        /// 国标印 <c>Metallized fibres</c>（美式复数）；其余标准照录入。
         ///
         /// 命中 fiber_database 里中文名为「金属镀膜纤维」的那三行，精确等值、忽略大小写与首尾空白：
         /// <c>Metallized fibres</c>（美式复数）、<c>Metallised fibre</c>（英式单数）、<c>Metallic</c>（简称）。
@@ -204,15 +207,47 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
 
         /// <summary>
         /// 锦纶 —— `Polyamide` 与 `Nylon` 是 fiber_database 里**同一纤维的两行**
-        /// （中文名同为"锦纶"）。精确等值、忽略大小写与首尾空白；带型号的
+        /// （中文名同为"锦纶"），另有两条 **ISO 专用条目**（见 <see cref="IsIsoPolyamideVariant"/>）
+        /// 也是同一根纤维、只有 Iso 列的回潮率不同。精确等值、忽略大小写与首尾空白；带型号的
         /// `Nylon 6` / `Polyamide 6.6` 不命中（库里没有这些写法，规则也不替实验室断言牌号）。
         ///
-        /// 只服务报告上的**显示名**（国标印 `Polyamide`，其余标准照录入）；
+        /// 显示名与**方法链**共用这一条（ISO -7 / GB 2910.7 / -20，以及 `Iso1833_12OtherFibres`）：
+        /// 漏掉 ISO 专用那两条，新条目的方法栏会整段落空。
         /// 取值、排序、去重仍用录入名。
         /// </summary>
         internal static bool IsPolyamideOrNylon(string f)
             => Clean(f).Equals("polyamide", StringComparison.OrdinalIgnoreCase)
-            || Clean(f).Equals("nylon", StringComparison.OrdinalIgnoreCase);
+            || Clean(f).Equals("nylon", StringComparison.OrdinalIgnoreCase)
+            || IsIsoPolyamideVariant(f);
+
+        /// <summary>
+        /// ISO 专用锦纶两条 —— `Nylon (ISO 6.25%)` / `Polyamide (ISO 6.25%)`。
+        ///
+        /// ISO 1833-1 的公定回潮率里聚酰胺是 6.25%，而原两行的 Iso 列是 5.75、
+        /// 还同时喂 AATCC/GB 等别的列，所以**不动原两行**、另加两条只填 Iso 列的条目。
+        /// 名字里的 `(ISO 6.25%)` 只是**下拉里的区分标识**，报告上一律印回 `Nylon` / `Polyamide`
+        /// （见 <see cref="DisplayBaseName"/>）。
+        /// </summary>
+        internal static bool IsIsoPolyamideVariant(string f)
+            => Clean(f).Equals("nylon (iso 6.25%)", StringComparison.OrdinalIgnoreCase)
+            || Clean(f).Equals("polyamide (iso 6.25%)", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 报告上印的名字：ISO 专用锦纶两条印回原名，其余一律原样返回（**不 Trim**，
+        /// 排版用的首尾空白照旧由调用方负责）。
+        ///
+        /// 只在**输出**这一步用（显示名、定性串、燃烧法、显微镜图注）；
+        /// 取值、排序、去重、分组仍用录入名 —— 那两行的回潮率就是靠录入名区分出来的。
+        /// </summary>
+        internal static string DisplayBaseName(string f)
+        {
+            var cleaned = Clean(f);
+            if (cleaned.Equals("nylon (iso 6.25%)", StringComparison.OrdinalIgnoreCase))
+                return "Nylon";
+            if (cleaned.Equals("polyamide (iso 6.25%)", StringComparison.OrdinalIgnoreCase))
+                return "Polyamide";
+            return f;
+        }
 
         /// <summary>
         /// 粘纤 —— `Viscose` 与 `Rayon` 是 fiber_database 里**同一纤维的两行**

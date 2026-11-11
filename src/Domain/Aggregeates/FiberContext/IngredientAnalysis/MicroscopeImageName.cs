@@ -7,14 +7,14 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
     /// 显微镜图库的**别名表** —— 把录入名换到图库里实际存在的那个文件名。
     ///
     /// **为什么需要**：图库是按纤维名取文件的（<c>WordTemplateEngine.InsertMicroscopeImages</c>
-    /// 里 <c>Path.Combine(imageFolder, $"{fiberName}.png")</c>），而 `fiber_database` 里
+    /// 里依次试 `<c>{fiberName}.png / .jpg / .jpeg</c>`），而 `fiber_database` 里
     /// **同一纤维有多行**，图库里却通常只有其中一行对应的那张图。
     /// 按另一行录入的记录就取不到图 —— 而且不是"图空着"，是整条 `continue`：
     /// **连图注都不印**，后面的纤维还会往前串一格。
     ///
     /// ⚠️ **这是一张显式白名单，不是"同义就收"**。<c>Rayon</c>（= Viscose）在
-    /// <see cref="FiberTokens"/> 的口径里同样是同义行（真实期还有 4 条记录因此没图），
-    /// 但是目前**只收下面这四条**，所以它**刻意不在这里**。
+    /// <see cref="FiberTokens"/> 的口径里同样是同义行，
+    /// 但是目前**不收**，所以它**刻意不在这里**。
     /// 别按"同义就加"扩表 —— 要加先问。
     ///
     /// ⚠️ **右侧不一定是另一行纤维**：<c>Rabbit</c> 既不在 `fiber_database`、也不在任何记录里，
@@ -34,10 +34,14 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 ["Flax"] = "Linen",
                 ["Nylon"] = "Polyamide",
                 ["Rabbit hair"] = "Rabbit",
+                // 图库文件名是「涤锦复合丝」，父槽的两个写法都指过去
+                ["Bicomponent Fiber"] = "涤锦复合丝",
+                ["Biconstituent Fiber"] = "涤锦复合丝",
+                ["Olefin"] = "Polypropylene",
             };
 
         /// <summary>
-        /// 取图库文件名。命中别名返回图库主名（返回规范写法）；未命中**原值返回** —— 所以除这四条外，全部输出逐字不变。
+        /// 取图库文件名。命中别名返回图库主名（返回规范写法）；未命中**原值返回** —— 所以除表里这几条外，全部输出逐字不变。
         /// </summary>
         internal static string Resolve(string fiberName)
             => fiberName != null && Aliases.TryGetValue(fiberName.Trim(), out var canonical)

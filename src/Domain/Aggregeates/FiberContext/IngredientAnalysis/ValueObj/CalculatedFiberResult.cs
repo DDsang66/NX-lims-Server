@@ -106,10 +106,17 @@
         /// <summary>
         /// 这一行是**复合纤维父行下插的展示子行**（<c>Bicomponent Fiber</c> /
         /// <c>Biconstituent Fiber</c> 的两个组分子成分）—— 性质与
-        /// <see cref="IsCellulosicSubRow"/> 完全相同：称量列全空，<see cref="Rate"/> 只是父行
+        /// <see cref="IsCellulosicSubRow"/> 基本相同：<see cref="Rate"/> 只是父行
         /// Rate 按 <see cref="BicomponentSubFibers"/> 拆干质量切出来的一份，
         /// **不参与** Rate 分母、不进结果表、不进成分数统计、不进称量瓶表。
         /// 见 <c>IngredientAnalysisCalculation.AppendBicomponentSubRows</c>。
+        ///
+        /// <para>
+        /// **唯一的差别**：Trial #1/#2 印子纤维各自录入的克重
+        /// （<see cref="GSMTrail1"/> / <see cref="GSMTrail2"/>）；
+        /// <see cref="RateTrail1"/> / <see cref="RateTrail2"/> / <see cref="Avg"/> /
+        /// <see cref="Correct"/> 仍空。
+        /// </para>
         /// </summary>
         public bool IsBicomponentSubRow { get; init; }
 

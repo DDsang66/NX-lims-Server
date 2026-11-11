@@ -389,18 +389,31 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
                 // 逐标准重算只产出 AnalysisResult），故只收集一次、每份复用。
                 var microscopeFibers = CollectMicroscopeFiberNames(ingredientsAnalysis.Components);
 
-                // 常规模式的多组分报告不印第二页的称量瓶表；
-                // 2C 仍保留这张表。判据与选模板同源：Type 来自聚合根，模式来自表单。
-                bool suppressWeighingBottle =
-                    mode == StandardMode.Current && ingredientsAnalysis.Type == AnalysisType.Multiple;
+                // 称量瓶表（第二页的实物称量记录）怎么剪 —— **按段判，不是整份一个开关**。
+                //
+                // 这张表的内容与所选标准无关：`ExpandWeighingBottleData` 只取 Section / Sum /
+                // Trial 克重与 `StableSeed(ReportNumber)` 派生的瓶号，不读本段的 Rate 与回潮率，
+                // 所以 N 份标准渲出来的表逐字相同，重复印 N 张只是冗余。口径：
+                //   常规 + 多组分 → 全剪；
+                //   2C  + 多组分 → 剪前 N-1 段，**只留最后一段**那一张；
+                //   单组分 → 恒 false。Single 模板本来就没有这张表，剪枝是 no-op，
+                //   保持 false 才能让单组分路径与改动前逐字相同。
+                //
+                // 判据与选模板同源：Type 来自聚合根，模式来自表单。
+                var sections = ingredientsAnalysis.StandardResults;
+                int sectionCount = sections.Count;
+                bool SuppressWeighingBottle(int index) =>
+                    ingredientsAnalysis.Type == AnalysisType.Multiple &&
+                    (mode == StandardMode.Current || index < sectionCount - 1);
 
                 // 第 1 份渲进基底文件 —— **单标准记录到此为止**，走的就是单标准那条老路径。
-                RenderOne(targetPath, ingredientsAnalysis.StandardResults[0], microscopeFibers, suppressWeighingBottle);
+                RenderOne(targetPath, sections[0], microscopeFibers, SuppressWeighingBottle(0));
 
                 // 多标准 → 第 2..N 份各渲一份中间产物，再并进上面那一份。
                 // 零回归保证：StandardResults.Count == 1 时**不经过合并器**。
-                if (ingredientsAnalysis.StandardResults.Count > 1)
-                    MergeStandardReports(targetPath, template, ingredientsAnalysis.StandardResults.Skip(1).ToList(), microscopeFibers, suppressWeighingBottle);
+                if (sectionCount > 1)
+                    MergeStandardReports(targetPath, template, sections.Skip(1).ToList(), microscopeFibers,
+                        SuppressWeighingBottle);
 
                 //ingredientsAnalysis.WorkSheetGenerator(filePath);
                 //执行保存
@@ -572,12 +585,17 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         }
 
         /// <summary>
-        /// 收集要插显微镜图的纤维名 —— 多组分展开所有溶解单元，**父行下的展示子行一并算进来**。
+        /// 收集要插显微镜图的纤维名 —— 多组分展开所有溶解单元，**纤维素父行的展示子行一并算进来**。
         ///
         /// <para>
-        /// 用户 2026-11-03：「子行纤维的图片也要，不要重复」。子行（纤维素子纤维 /
-        /// 复合纤维的两个组分子成分）在图库里有图就印；没图的仍由
+        /// 用户 2026-11-03：「子行纤维的图片也要，不要重复」。纤维素子纤维（父槽名 + 占比 &gt; 0）
+        /// 在图库里有图就印；没图的仍由
         /// <see cref="IWordTemplateEngine.InsertMicroscopeImages"/> 整条跳过、不占槽位。
+        /// </para>
+        /// <para>
+        /// **复组分子行不展开**：「复合纤维出涤锦复合丝时就不用出复合纤维子纤维的两个了」。
+        /// 复合纤维父行本身照旧出图（别名表指到涤锦复合丝那张）；同一记录里另有独立纤维行
+        /// （如复合纤维 + 涤纶）的照旧出图 —— 只是不把父行下的两个组分子纤维当独立纤维展开。
         /// </para>
         /// <para>
         /// **去重按解析后的图库文件名**：<c>Spandex</c> 与 <c>Elastane</c> 指向同一张图，
@@ -593,14 +611,17 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
                 .ToList();
 
         /// <summary>
-        /// 一行（父行 + 其下展示子行）的纤维名，顺序即称量表行序：父行在前、子行按录入顺序在后。
+        /// 一行（父行 + 其下纤维素展示子行）的纤维名，顺序即称量表行序：父行在前、子行按录入顺序在后。
         ///
         /// <para>
-        /// **子行要过与结果表同一套闸门**：
+        /// **纤维素子行要过与结果表同一套闸门**：
         /// 图名单只判名字非空、结果表却按 <see cref="FiberRowSlot"/> 展开 ——
         /// 残留在**非父槽行**上的子纤维（改成分没清子行、回填老草稿、行间搬数据）
-        /// 就会"有图、结果表里没有这个成分"。子行插不进结果表的几种情形，这里同样不印：
-        /// 非父槽行挂的纤维素子行、占比为 0 的子行、条数不是 2 或全没称量值的复组分子行。
+        /// 就会"有图、结果表里没有这个成分"。因此非父槽行挂的纤维素子行、占比为 0 的子行都不印。
+        /// </para>
+        /// <para>
+        /// **复组分子行一律不印**：父行本身已有图（涤锦复合丝），
+        /// 两个组分子纤维不再各占一张；与子纤维条数、称量值无关。
         /// </para>
         /// </summary>
         private static IEnumerable<string> RowFiberNames(FiberComponent component)
@@ -609,14 +630,12 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
             {
                 case DissolvedFiberComponent dissolved:
                     foreach (var unit in dissolved.DissolutionUnits)
-                        foreach (var name in RowFiberNames(
-                                     unit.FiberName, unit.CellulosicSubFibers, unit.BicomponentSubFibers))
+                        foreach (var name in RowFiberNames(unit.FiberName, unit.CellulosicSubFibers))
                             yield return name;
                     break;
 
                 case SplittingFiberComponent splitting:
-                    foreach (var name in RowFiberNames(
-                                 splitting.FiberName, splitting.CellulosicSubFibers, splitting.BicomponentSubFibers))
+                    foreach (var name in RowFiberNames(splitting.FiberName, splitting.CellulosicSubFibers))
                         yield return name;
                     break;
 
@@ -629,25 +648,17 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
 
         private static IEnumerable<string> RowFiberNames(
             string fiberName,
-            IReadOnlyList<CellulosicSubFiber>? cellulosicSubFibers,
-            IReadOnlyList<BicomponentSubFiber>? bicomponentSubFibers)
+            IReadOnlyList<CellulosicSubFiber>? cellulosicSubFibers)
         {
+            // ISO 专用锦纶（`Nylon (ISO 6.25%)` 那两条）印回原名再取图 ——
+            // 别名表里已有 Nylon → Polyamide，不必给新名再加条目；图注也跟着印原名。
             if (!string.IsNullOrWhiteSpace(fiberName))
-                yield return fiberName;
+                yield return FiberTokens.DisplayBaseName(fiberName);
 
             // 纤维素子行：闸门与结果表的 ExpandedCellulosicSubFibers 一致（父槽名 + 占比 > 0）
             if (FiberRowSlot.IsCellulosicParentSlot(fiberName))
                 foreach (var sub in cellulosicSubFibers ?? Array.Empty<CellulosicSubFiber>())
                     if (!string.IsNullOrWhiteSpace(sub.FiberName) && sub.Percentage > 0)
-                        yield return sub.FiberName;
-
-            // 复组分子行：闸门与 PostProcessBicomponent 一致（恰好 2 条，且拆得出干重）。
-            // 干重拆不出来最常见的原因是子纤维没有称量值 —— 那种行结果表不插子行。
-            if (FiberRowSlot.IsBicomponentSlot(fiberName)
-                && bicomponentSubFibers is { Count: 2 }
-                && bicomponentSubFibers.Any(s => s.GSMTrail1 > 0 || s.GSMTrail2 > 0))
-                foreach (var sub in bicomponentSubFibers)
-                    if (!string.IsNullOrWhiteSpace(sub.FiberName))
                         yield return sub.FiberName;
         }
 
@@ -665,9 +676,14 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         /// 与基底**同一个**模板的相对路径（调用方解析一次后传进来）。
         /// 不在这里按 rest[i] 的类型另取：一份合并稿的所有段必须同版式。
         /// </param>
+        /// <param name="suppressAtSection">
+        /// 该段要不要剪掉称量瓶表，入参是**绝对段号**（0 起，rest[i] 就是 i + 1）。
+        /// 剪不剪**逐段不同**（2C 要留最后一段那一张），所以是委托而不是一个布尔值 ——
+        /// 见 <see cref="BuildAnalysisAsync"/> 里那个局部函数的口径。
+        /// </param>
         private void MergeStandardReports(
             string basePath, string template, IReadOnlyList<AnalysisResult> rest,
-            IReadOnlyList<string> microscopeFibers, bool suppressWeighingBottle)
+            IReadOnlyList<string> microscopeFibers, Func<int, bool> suppressAtSection)
         {
             string tempDir = Path.Combine(Path.GetTempPath(), "nxlims-docx-merge", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempDir);
@@ -679,7 +695,7 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
                 {
                     string path = Path.Combine(tempDir, $"section{i + 2}.docx");
                     _fileStorage.CopyTemplateTo(template, path);
-                    RenderOne(path, rest[i], microscopeFibers, suppressWeighingBottle);
+                    RenderOne(path, rest[i], microscopeFibers, suppressAtSection(i + 1));
                     sources.Add(path);
                 }
 

@@ -59,6 +59,10 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// 差别只在叫法 —— AATCC 口径下分析员录 Nylon，ISO/FZ 口径下录 Polyamide。
         /// 两个父行共用这一份清单，所以四个组合都能选到。
         ///
+        /// 另有 **ISO 专用那两条**（`Nylon (ISO 6.25%)` / `Polyamide (ISO 6.25%)`，
+        /// 只填 Iso 列、回潮率 6.25，见 <see cref="FiberTokens.IsIsoPolyamideVariant"/>）：
+        /// 它们是下拉层面的条目，**不进这份子纤维清单** —— 复合纤维的组成按上面三条录。
+        ///
         /// **加它对计算是零漂移**：<c>LookupMoistureRegain</c> 两行同值（无论按哪个标准的列）、
         /// <c>BurningOdour</c> 两行同为 Amide、显微镜取图本就有 Nylon→Polyamide 的别名
         /// （见 <see cref="MicroscopeImageName"/>）。会变的只是报告上印出来的名字。

@@ -4,11 +4,11 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
     /// 称量行的「**这一行能不能挂子纤维**」闸门 —— 计算与显微镜图名单共用。
     ///
     /// <para>
-    /// 两个消费者必须同一口径，否则报告上会出现"有图、结果表里却没有这个成分"：
     /// 结果表按这里的两道闸门展开子行
     /// （<c>IngredientAnalysisCalculation.ExpandedCellulosicSubFibers</c> /
-    /// <c>PostProcessBicomponent</c>），图名单按同一套闸门决定要不要插那张图
-    /// （<c>FiberWorksheetService.RowFiberNames</c>）。
+    /// <c>PostProcessBicomponent</c>）；图名单只用**纤维素**那道
+    /// （<c>FiberWorksheetService.RowFiberNames</c>）—— 复组分子行自 2026-11-11 起不印图
+    /// （父行本身已有图），这是刻意的分歧，不是漏改。
     /// </para>
     ///
     /// <para>

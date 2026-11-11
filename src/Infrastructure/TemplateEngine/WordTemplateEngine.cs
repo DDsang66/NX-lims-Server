@@ -764,15 +764,22 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine
 
                     // 图库文件名走别名表（Spandex→Elastane 等，见 MicroscopeImageName）。
                     // 只用别名**找文件** —— 下面图注那行仍用录入名 fiberName，一字未改。
-                    var imagePath = Path.Combine(imageFolder, $"{MicroscopeImageName.Resolve(fiberName)}.png");
-                    if (!File.Exists(imagePath)) continue;
+                    var imagePath = FindMicroscopeImage(imageFolder, MicroscopeImageName.Resolve(fiberName));
+                    if (imagePath == null) continue;
+
+                    byte[] imageBytes = File.ReadAllBytes(imagePath);
+
+                    // 部件类型按**字节头**判，不看后缀：图库里存在 `.jpg` 后缀、内容却是 PNG 的文件，后缀不可信，
+                    // 类型塞错 Word 会报"无法显示图片"。认不出的格式整条跳过，
+                    // 与"取不到图"同处理（不留空槽、不印图注）。
+                    var imageType = SniffImagePartType(imageBytes);
+                    if (imageType == null) continue;
 
                     if (slotIndex >= bookmarks.Count) break;
 
                     var bookmark = bookmarks[slotIndex++];
 
-                    byte[] imageBytes = File.ReadAllBytes(imagePath);
-                    var mediaPart = mainPart.AddImagePart(ImagePartType.Png);
+                    var mediaPart = mainPart.AddImagePart(imageType.Value);
                     using var ms = new MemoryStream(imageBytes);
                     mediaPart.FeedData(ms);
                     string contentId = mainPart.GetIdOfPart(mediaPart);
@@ -812,6 +819,41 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine
 
                 mainPart.Document.Save();
             }
+        }
+
+        /// <summary>显微镜图库允许的后缀。按序探测，命中第一个算。</summary>
+        private static readonly string[] MicroscopeImageExtensions = { ".png", ".jpg", ".jpeg" };
+
+        /// <summary>
+        /// 在 <paramref name="imageFolder"/> 里找 `<paramref name="fileName"/>.png/.jpg/.jpeg`，
+        /// 找不到返回 <c>null</c>（调用方整条跳过，不留空槽）。
+        /// **后缀只是找文件的手段，格式以内容为准** —— 见 <see cref="SniffImagePartType"/>。
+        /// </summary>
+        private static string? FindMicroscopeImage(string imageFolder, string fileName)
+        {
+            foreach (var ext in MicroscopeImageExtensions)
+            {
+                var path = Path.Combine(imageFolder, fileName + ext);
+                if (File.Exists(path)) return path;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 按文件头判部件类型（图库里 `.jpg` 后缀的也可能是 PNG 字节，所以**不能按后缀判**）。
+        /// 只认 PNG / JPEG 两种 —— 其余（bmp/gif 等）返回 null 让调用方跳过，
+        /// 塞进错误类型比不插图更糟。
+        /// </summary>
+        private static PartTypeInfo? SniffImagePartType(byte[] bytes)
+        {
+            if (bytes.Length >= 8
+                && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47)
+                return ImagePartType.Png;
+
+            if (bytes.Length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF)
+                return ImagePartType.Jpeg;
+
+            return null;
         }
 
         private static Drawing CreateImageDrawing(string relationshipId, string imageName, uint id)

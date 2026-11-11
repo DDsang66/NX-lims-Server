@@ -360,7 +360,12 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
                 result[$"Section_{rowIndex}"] = sectionValue;
                 // 父槽下插的展示子行（纤维素 / 复合纤维）**缩进两格**，一眼看出它是上一行拆出来的。
                 // 缩进只发生在展示层 —— 领域层存的仍是光名字（页脚汇总、结果表都按原名认）。
-                result[$"Sum_{rowIndex}"] = unit.IsDisplaySubRow ? "  " + unit.Sum : unit.Sum;
+                //
+                // ISO 专用锦纶两条（`Nylon (ISO 6.25%)` 等）在这里也印回 `Nylon` / `Polyamide`：
+                // 带括号的名字只是下拉里的区分标识（与 Test Result 同一口径）。
+                // 归一**只在写书签这一步**，领域层的 Sum 仍按录入名参与分组 / 查表。
+                var sumText = FiberTokens.DisplayBaseName(unit.Sum);
+                result[$"Sum_{rowIndex}"] = unit.IsDisplaySubRow ? "  " + sumText : sumText;
                 // Trial # 1：有克重印克重；纤维素子行没有克重，改印**录入的占比**（50.00%）。
                 // 只影响这一格，Rate / Test Result 一个数都不动 —— 两者口径本来就不同
                 // （Rate 按公定重量份额切，见 AppendCellulosicSubRows）。
@@ -535,8 +540,8 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
                     result[$"Description{row}"] = "";
                 }
 
-                // Component
-                result[$"Component{row}"] = unit.Sum;
+                // Component —— 与称量表 Sum 同一口径（ISO 专用锦纶印回原名）
+                result[$"Component{row}"] = FiberTokens.DisplayBaseName(unit.Sum);
 
                 // sampleA / sampleB — GSMTrail 为 0 则留空
                 result[$"sampleA{row}"] = unit.GSMTrail1 == 0 ? "" : unit.GSMTrail1.ToString("F4");

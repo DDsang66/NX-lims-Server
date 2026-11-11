@@ -826,8 +826,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 return hasAcrylic ? 12 : 20;
 
             // polyamide/nylon + elastane（锦氨，任意顺序）→ -20（DMAc 法）
-            if (((f == "polyamide" || f == "nylon") && FiberTokens.IsElastane(s))
-             || (FiberTokens.IsElastane(f) && (s == "polyamide" || s == "nylon")))
+            if ((FiberTokens.IsPolyamideOrNylon(f) && FiberTokens.IsElastane(s))
+             || (FiberTokens.IsElastane(f) && FiberTokens.IsPolyamideOrNylon(s)))
                 return hasAcrylic ? 12 : 20;
 
             // 弹性纤维 × 羊毛 → -20（DMAc 法）。
@@ -854,7 +854,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 return 12;
 
             // polyamide/nylon + any → -7
-            if (f == "polyamide" || f == "nylon")
+            if (FiberTokens.IsPolyamideOrNylon(f))
                 return 7;
 
             // 丙烯腈类在前 → -12（DMF 法）。谓词含 Modacrylic（1833-12 适用范围含 "certain modacrylics"）。
@@ -926,12 +926,12 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 return 4;
 
             // polyamide/nylon + elastane（锦氨，任意顺序）→ GB/T 2910.20
-            if (((f == "polyamide" || f == "nylon") && FiberTokens.IsElastane(s))
-             || (FiberTokens.IsElastane(f) && (s == "polyamide" || s == "nylon")))
+            if ((FiberTokens.IsPolyamideOrNylon(f) && FiberTokens.IsElastane(s))
+             || (FiberTokens.IsElastane(f) && FiberTokens.IsPolyamideOrNylon(s)))
                 return hasAcrylic ? null : 20;
 
             // polyamide/nylon + 非spandex/elastane → GB/T 2910.7
-            if ((f == "polyamide" || f == "nylon") && s != "spandex" && s != "elastane")
+            if (FiberTokens.IsPolyamideOrNylon(f) && s != "spandex" && s != "elastane")
                 return 7;
 
             // 丙烯腈类在前 → GB/T 2910.12（谓词含 Modacrylic），后位同样必须是"某些其他纤维"
