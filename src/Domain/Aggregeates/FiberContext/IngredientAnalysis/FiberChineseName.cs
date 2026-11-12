@@ -44,9 +44,9 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             => standard?.Trim().Equals(GbStandard, StringComparison.OrdinalIgnoreCase) == true;
 
         /// <summary>
-        /// 纤维名 → <c>中文名 + 英文原名</c>（如 <c>棉Cotton</c>）；查不到就原样返回英文。
+        /// 纤维名 → <c>英文原名 + 中文名</c>（如 <c>Cotton棉</c>）；查不到就原样返回英文。
         ///
-        /// 中文在前、英文紧跟、**中间不加空格** —— 与原工作簿 `绵羊毛wool` 那 25 条的写法一致。
+        /// 英文在前、中文紧跟、中间不加空格。
         /// 查表时 Trim、返回时保留原样：名字是别的通道来的，不该在这里被悄悄规整。
         /// </summary>
         public static string Localize(string? name, IReadOnlyDictionary<string, string>? map)
@@ -55,8 +55,64 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             if (map == null || map.Count == 0) return name;
 
             return map.TryGetValue(name.Trim(), out var cn) && !string.IsNullOrWhiteSpace(cn)
-                ? cn + name
+                ? name + cn
                 : name;
+        }
+
+        /// <summary>
+        /// 复合纤维父行的中文名 —— **固定** <c>聚酯/聚酰胺复合纤维</c>。
+        /// </summary>
+        public const string CompositeFiberName = "聚酯/聚酰胺复合纤维";
+
+        /// <summary>
+        /// 本份含复合纤维时，其余 Polyamide/Nylon 在正文里的中文名（页脚印 <c>聚酰胺纤维</c>）。
+        /// </summary>
+        public const string CompositePolyamideName = "聚酰胺";
+
+        /// <summary>
+        /// 括号内子纤维的中文名走**报告口径**（聚酯 / 聚酰胺），与父行同一个叫法；
+        /// 不取库里的 `聚酯纤维` / `锦纶`。表里没有的回落库中文名，库里也没有就留英文。
+        /// </summary>
+        private static readonly IReadOnlyDictionary<string, string> CompositeComponentNames =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Polyester"] = "聚酯",
+                ["Polyamide"] = "聚酰胺",
+                ["Nylon"] = "聚酰胺",
+            };
+
+        /// <summary>
+        /// 复合纤维括号内**单个子纤维**的中文名：<c>Polyester聚酯</c>，与 <see cref="Localize"/> 同一拼法。
+        /// </summary>
+        public static string LocalizeCompositeComponent(string? name, IReadOnlyDictionary<string, string>? dbNames)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return name ?? string.Empty;
+
+            if (CompositeComponentNames.TryGetValue(name.Trim(), out var reportName))
+                return name + reportName;
+
+            return dbNames != null && dbNames.TryGetValue(name.Trim(), out var dbName)
+                   && !string.IsNullOrWhiteSpace(dbName)
+                ? name + dbName
+                : name;
+        }
+
+        /// <summary>
+        /// 页脚 MR 汇总的中文尾巴：本段含复合纤维时，`锦纶` 改印 `聚酰胺纤维`。
+        ///
+        /// 只换**以锦纶结尾**的名字（`Polyamide锦纶` / `Nylon锦纶`），英文部分与其余纤维一概不动。
+        /// 只喂页脚：结果行、称量表、定性串都不经过这里。
+        /// </summary>
+        public static string CompositeFooterName(string localized)
+        {
+            const string polyamideCn = "锦纶";
+            const string compositePolyamideCn = "聚酰胺纤维";
+
+            if (string.IsNullOrEmpty(localized)) return localized ?? string.Empty;
+
+            return localized.EndsWith(polyamideCn, StringComparison.Ordinal)
+                ? localized[..^polyamideCn.Length] + compositePolyamideCn
+                : localized;
         }
     }
 }

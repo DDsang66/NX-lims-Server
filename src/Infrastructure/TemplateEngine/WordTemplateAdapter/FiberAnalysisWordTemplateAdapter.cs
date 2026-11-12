@@ -156,23 +156,30 @@ namespace NX_lims_Softlines_Command_System.src.Infrastructure.TemplateEngine.Wor
             // 欧洲（ISO1833 / DIN / EN / BS）与澳洲（AS 2001.7）体系恒两位小数。
             //
             // 取名与 Test Result 同一套（先改拼法、后中文化，见 DisplayNameForReport）——
-            // 两处口径不一致过：国标录 `Linen` 时 result 印 `亚麻Flax`、页脚却印 `亚麻Linen`。
-            // 三类父槽（纤维素 / 再生纤维素 / 复合纤维）本来 MoistureRegainKnown = false，不进这里。
+            // 两处口径不一致过：国标录 `Linen` 时 result 印 `Flax亚麻`、页脚却印 `Linen亚麻`。
+            // 三类父槽（纤维素 / 再生纤维素 / 复合纤维）本来 MoistureRegainKnown = false，不进这里；
+            // 复合纤维的**组分子行**照旧进 —— 但此时中文 `锦纶` 改印 `聚酰胺纤维`（2026-11-12 用户裁定，
+            // 与父行的 `聚酰胺` 对齐）。判据按**本段**：页面就是按段渲染的。
             //
             // 同名只留第一条，去重放在**取名之后** —— 按印出来的名字去重，
             // `Flax` / `Linen` 这类同一只纤维的两种拼法才只列一条。
             // 去重不会改到值：能走到这里的回潮率都是按名字查表来的，同名必然同值。
             var useChinese = analysisResult.UseChineseNames;
             var keepTwoDecimals = MoistureRegainResolver.UsesIsoSchedule(analysisResult.Methods);
-            var mrItems = analysisResult.CalculatedFiberResult
+            var rows = analysisResult.CalculatedFiberResult
                 .OfType<MultiCalculatedFiberItem>()
                 .SelectMany(m => m.MultiFiberRowUnits ?? new List<MultiFiberRowUnit>())
+                .ToList();
+            var hasBicomponent = rows.Any(r => FiberRowSlot.IsBicomponentSlot(r.Sum));
+
+            var mrItems = rows
                 .Where(r => !string.IsNullOrWhiteSpace(r.Sum) && !r.Sum.Contains('/'))
                 .Where(r => r.MoistureRegainKnown)
                 .Select(r => new
                 {
                     Name = IngredientAnalysisCalculation.DisplayNameForReport(
-                        r.Sum, analysisResult.Methods, useChinese, analysisResult.ChineseFiberNames),
+                        r.Sum, analysisResult.Methods, useChinese, analysisResult.ChineseFiberNames,
+                        hasBicomponent),
                     r.MoistureRegain,
                 })
                 .DistinctBy(x => x.Name)

@@ -91,7 +91,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             if (string.IsNullOrWhiteSpace(reportNo)) throw new ArgumentException("RepoNo. is required");
             if (methods == null || !methods.Any()) throw new ArgumentException("Methods are required");
             if (components == null || !components.Any()) throw new ArgumentException("至少包含一组分数据");
-            //等等
+            
 
             return new IngredientAnalysisCalculation
             {
@@ -678,7 +678,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// <see cref="MultiFiberRowUnit.Rate"/> 只是父行印出的 Rate 按**拆干质量**切出来的一份。
         /// </para>
         /// <para>
-        /// **Trial #1/#2 印子纤维各自录入的克重**（2026-11-11 用户裁定）：原样透传
+        /// **Trial #1/#2 印子纤维各自录入的克重**：原样透传
         /// <see cref="BicomponentSubFiber.GSMTrail1"/> / <see cref="BicomponentSubFiber.GSMTrail2"/>，
         /// 不做换算 —— 即使「子行一 = 父行副本」那种录法会印出与父行相同的数。
         /// 其余列（RateTrail / Avg / Correct）仍空。<b>只是加印，不参与任何算术。</b>
@@ -801,7 +801,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             // 只喂 Recommendation 那一列 —— Test Result 照实测逐项点名，见下面 Results 的说明。
             var isAatcc = standard?.StartsWith("AATCC", StringComparison.OrdinalIgnoreCase) == true;
 
-            // 国标（FZ/T 01057）：结果行里的纤维名印成 `中文English`。
+            // 国标（FZ/T 01057）：结果行里的纤维名印成 `English中文`。
             // 判据同样读**入参**、不读 Methods，理由与上面 isAatcc 一字不差。
             // 与 AATCC 天然互斥 —— 一个标准串不可能既是 FZ/T 又是 AATCC。
             var isGb = FiberChineseName.IsChineseReport(standard);
@@ -828,8 +828,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             // Bicomponent/Biconstituent 格式化后处理
             result = result with
             {
-                Results = PostProcessBicomponent(result.Results, calculatedFiberResult, "F1"),
-                Recommendation = PostProcessBicomponent(result.Recommendation, calculatedFiberResult, "F0")
+                Results = PostProcessBicomponent(result.Results, calculatedFiberResult, "F1", isGb),
+                Recommendation = PostProcessBicomponent(result.Recommendation, calculatedFiberResult, "F0", isGb)
             };
 
             // 结果行保持 `{pct}% {name}` 原样，**不再补行首空格**：
@@ -855,16 +855,22 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// （检验结果照实测逐项点名）。
         /// </param>
         /// <param name="useChineseNames">
-        /// 本份是否国标 —— 纤维名印成 `中文English`。
+        /// 本份是否国标 —— 纤维名印成 `English中文`。
         /// **只加在名字位置**（第一个 `%` 之后），所以下游的 <see cref="PostProcessBicomponent"/>
-        /// 整行重写时取不到它。双组分父行因此天然保持英文，无需在这里特判。
+        /// 整行重写时取不到它 —— 复合纤维父行的中文由它**自己**拼（2026-11-12 起），不在这里特判。
         /// </param>
         /// <param name="naming">
         /// 本份的显示名策略（亚麻 / 氨纶 / 金属纤维 / 橡筋 / 锦纶）。null 等同照录入。
-        /// **先改名、后中文化** —— 反了会印成 `亚麻Linen` / `氨纶Spandex`。
+        /// **先改名、后中文化**。
         /// </param>
         private List<string> CalculateFormattedResults(List<CalculatedFiberResult> calculatedFiberResult, int decimalPlaces, string format, bool isAatcc = false, bool useChineseNames = false, ReportFiberNaming? naming = null)
         {
+            // 本份含复合纤维时，其余 Polyamide/Nylon 的中文改印「聚酰胺」，与父行同一叫法
+            // （页脚印「聚酰胺纤维」，见 DisplayNameForReport 的 inCompositeContext）。
+            var inCompositeContext = calculatedFiberResult
+                .OfType<MultiCalculatedFiberItem>()
+                .Any(m => m.MultiFiberRowUnits?.Any(r => IsBicomponentFiber(r.Sum)) == true);
+
             // 单组分：每个纤维固定 100%，不求和。
             // `{Sample}:  100% {Name}` 冒号后**固定两个空格**，是外观约定（Arial 下两个空格才等于
             // 一个数字宽），不是行首补齐，别合并成一个。
@@ -872,7 +878,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             {
                 return calculatedFiberResult
                     .OfType<SingleCalculatedFiberItem>()
-                    .Select(s => $"{s.Sample}:  100% {ResultFiberName(s.FiberName, useChineseNames, naming)}")
+                    .Select(s => $"{s.Sample}:  100% {ResultFiberName(s.FiberName, useChineseNames, naming, inCompositeContext)}")
                     .ToList();
             }
 
@@ -974,7 +980,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             return rounded
                 .OrderBy(r => IsOtherFiberLine(r.Name) ? 1 : 0)
                 .ThenByDescending(r => r.Rate)
-                .Select(r => $"{r.RoundedRate.ToString(format)}% {ResultFiberName(r.Name, useChineseNames, naming)}")
+                .Select(r => $"{r.RoundedRate.ToString(format)}% {ResultFiberName(r.Name, useChineseNames, naming, inCompositeContext)}")
                 .ToList();
         }
 
@@ -1188,7 +1194,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 if (Viscose != ViscoseNaming.AsEntered && FiberTokens.IsViscoseOrRayon(name))
                     return Viscose == ViscoseNaming.Viscose ? "Viscose" : "Rayon";
 
-                // JIS：大类名 + 括号内具体纤维（2026-10-22 用户裁定，Modal / Lyocell 两项）。
+                // JIS：大类名 + 括号内具体纤维（Modal / Lyocell 两项）。
                 if (Regenerated == RegeneratedNaming.JisParenthetical && FiberTokens.IsModal(name))
                     return "Regenerated fiber (Modal)";
 
@@ -1221,7 +1227,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
 
         /// <summary>
         /// 报告上印的纤维名：先按体系改名（亚麻 / 氨纶 / 金属纤维 / 金属镀膜纤维 / 橡筋 / 锦纶 / 粘纤 / 莫代尔·莱赛尔），
-        /// 国标且查得到中文 → `中文English`，否则原样。
+        /// 国标且查得到中文 → `English中文`，否则原样。本份含复合纤维时，
+        /// Polyamide/Nylon 不走库里的「锦纶」，改印「聚酰胺」（与父行同一叫法）。
         ///
         /// 这里是**唯一的**取名口，单组分与多组分两条格式化分支都走它 ——
         /// 排序、去重、亚 5% 聚合一律仍用英文原名做键，改名与中文化只发生在最后拼串那一步。
@@ -1229,13 +1236,20 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// ⚠️ **先改名、后中文化**：`Flax`/`Linen` 在 fiber_database 里中文名同为"亚麻"、
         /// `Elastane`/`Spandex` 同为"氨纶"、`Polyamide`/`Nylon` 同为"锦纶"、
         /// `Viscose`/`Rayon` 同为"粘纤" ——
-        /// 顺序反过来会印成 `亚麻Linen` / `氨纶Spandex` / `锦纶Nylon` / `粘纤Rayon`。
+        /// 顺序反过来会印成 `Linen亚麻` / `Spandex氨纶` / `Nylon锦纶` / `Rayon粘纤`。
         /// </summary>
-        private string ResultFiberName(string name, bool useChineseNames, ReportFiberNaming? naming)
+        private string ResultFiberName(string name, bool useChineseNames, ReportFiberNaming? naming,
+            bool inCompositeContext = false)
         {
             var printed = naming?.Apply(name) ?? name;
 
-            return useChineseNames ? FiberChineseName.Localize(printed, _fiberChineseNames) : printed;
+            if (!useChineseNames) return printed;
+
+            // 含复合纤维时改用报告口径的「聚酰胺」，不取库里的「锦纶」。
+            if (inCompositeContext && FiberTokens.IsPolyamideOrNylon(printed))
+                return printed + FiberChineseName.CompositePolyamideName;
+
+            return FiberChineseName.Localize(printed, _fiberChineseNames);
         }
 
         /// <summary>
@@ -1249,10 +1263,14 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// · AATCC/Korea/CNS/JIS/AS/Regulation 的 Methods 是标准原文，
         ///   ISO/DIN/EN/BS 的是含 `ISO` 的渲染链，<c>For</c> 的判据都仍然成立；
         /// · Korea 先于 AATCC 的顺序也不受影响（Korea 串逐字留在 Methods 里）。
+        ///
+        /// <paramref name="inCompositeContext"/> 只有页脚传真值：本段含复合纤维时，
+        /// 中文 `锦纶` 改印 `聚酰胺纤维`，与父行的 `聚酰胺` 对齐。
         /// </summary>
         public static string DisplayNameForReport(
             string name, string? methods, bool useChineseNames,
-            IReadOnlyDictionary<string, string>? chineseNames)
+            IReadOnlyDictionary<string, string>? chineseNames,
+            bool inCompositeContext = false)
         {
             var naming = ReportFiberNaming.For(
                 methods,
@@ -1261,7 +1279,13 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
 
             var printed = naming.Apply(name);
 
-            return useChineseNames ? FiberChineseName.Localize(printed, chineseNames) : printed;
+            var localized = useChineseNames ? FiberChineseName.Localize(printed, chineseNames) : printed;
+
+            // 本段含复合纤维时，页脚的中文 `锦纶` 改印 `聚酰胺纤维`。
+            // 只影响页脚这一个调用方 —— 结果行/称量表不走这里。
+            return useChineseNames && inCompositeContext
+                ? FiberChineseName.CompositeFooterName(localized)
+                : localized;
         }
 
         /// <summary>
@@ -1757,9 +1781,16 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// Bicomponent/Biconstituent 格式化（括号内按占比**从大到小**，Y ≥ Z）：
         /// TestResult: "X% Polyester/Polyamide bicomponent (Y%Polyamide Z%Polyester)"
         /// Recommendation: "X% Bicomponent Fiber (Y%Polyamide Z%Polyester)"
+        ///
+        /// <para>
+        /// 国标（<paramref name="useChineseNames"/>）在父名后面紧跟中文，形态与普通纤维一致。
+        /// 中文必须拼在**这里** —— 父行整行由本方法从结构化数据重写，
+        /// <c>FiberChineseName.Localize</c> 加上的中文会被整行盖掉。
+        /// 括号里的子纤维也中文化，走报告口径（聚酯 / 聚酰胺）；非国标一个字不加。
+        /// </para>
         /// </summary>
         private List<string> PostProcessBicomponent(List<string> results,
-            List<CalculatedFiberResult> calculatedFiberResult, string format)
+            List<CalculatedFiberResult> calculatedFiberResult, string format, bool useChineseNames)
         {
             var multi = calculatedFiberResult.OfType<MultiCalculatedFiberItem>().FirstOrDefault();
             if (multi?.MultiFiberRowUnits == null) return results;
@@ -1817,17 +1848,25 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
 
                 // 括号内按**占比从大到小**印。
                 // OrderByDescending 是稳定排序：两半相等时仍按 s1、s2 原顺序。
-                // 只动括号里那两个数，父名前面那串 `Polyester/Polyamide bicomponent` 照旧。
-                var inner = new[] { (Name: s1Name, Pct: s1Pct, Share: 100m - residueShare),
-                                    (Name: s2Name, Pct: s2Pct, Share: residueShare) }
+                // 父名前面那串 `Polyester/Polyamide bicomponent` 照旧（只在其后接中文）。
+                var ordered = new[] { (Name: s1Name, Pct: s1Pct, Share: 100m - residueShare),
+                                      (Name: s2Name, Pct: s2Pct, Share: residueShare) }
                     .OrderByDescending(x => x.Share)
-                    .Select(x => $"{x.Pct}%{x.Name}")
                     .ToList();
 
+                var inner = ordered
+                    .Select(x => $"{x.Pct}%{(useChineseNames
+                        ? FiberChineseName.LocalizeCompositeComponent(x.Name, _fiberChineseNames)
+                        : x.Name)}")
+                    .ToList();
+
+                // 父行中文名是固定串，与括号里的组分、顺序都无关。
+                var cn = useChineseNames ? FiberChineseName.CompositeFiberName : null;
+
                 if (line.Contains("Biconstituent Fiber"))
-                    results[i] = $"{parentPct}% {fullName} ({string.Join(" ", inner)})";
+                    results[i] = $"{parentPct}% {fullName}{cn} ({string.Join(" ", inner)})";
                 else
-                    results[i] = $"{parentPct}% {s1Name}/{s2Name} {shortName} ({string.Join(" ", inner)})";
+                    results[i] = $"{parentPct}% {s1Name}/{s2Name} {shortName}{cn} ({string.Join(" ", inner)})";
             }
 
             return results;

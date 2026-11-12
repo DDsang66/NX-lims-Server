@@ -92,24 +92,50 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         };
 
         /// <summary>
-        /// **单组分下拉不供**的几族（2026-11-09 实验室裁定）：
-        /// 两条 AATCC 复合方法（<c>TM20A</c>，含 Korea 变体）、CNS、JIS。
         ///
-        /// **只影响下拉摆什么**，不影响生成：库里既有的这些方法串照旧能算、能出报告，
-        /// 单组分勾了别的定量标准也照印（「不派生」是链上的口径，不是下拉的闸）。
-        /// 判据按串本身：<c>TM20A</c> 覆盖两条复合方法 + Korea 变体，<c>AATCC TM20-2021</c> 单独保留。
+        /// 用**精确串**而不是前缀/子串：裁定点名的就是这几条，通配会顺手带走整族。
         /// </summary>
-        private static bool IsSingleComponentExcluded(string method)
-            => method.StartsWith("CNS", StringComparison.OrdinalIgnoreCase)
-            || method.StartsWith("JIS", StringComparison.OrdinalIgnoreCase)
-            || method.Contains("TM20A", StringComparison.Ordinal);
+        private static readonly IReadOnlySet<string> SingleExcludedCurrent = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "AATCC TM20-2021  AATCC TM20A-2025",
+        };
 
-        /// <summary>单组分版的两份清单 —— 由上面两份**推导**，不另抄一遍。</summary>
+        /// <summary>
+        /// **2C 口径的单组分下拉不供**的条目：维持原样，两条 <c>TM20A-2021e</c> 都不供
+        /// （CAN/CNS/JIS 三族本来就不在 2C 清单里，不用在这里再列）。
+        ///
+        /// **只影响下拉摆什么**，不影响生成：库里既有的这些方法串照旧能算、能出报告 ——
+        /// 链上对 AATCC/CAN/CNS/JIS 是**逐字透传**（不补 <see cref="FiberStandardChainBuilder"/> 的 GB .3），
+        /// 这条与「单组分不派生定量子标准」是两件事。
+        /// </summary>
+        private static readonly IReadOnlySet<string> SingleExcludedDual = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "AATCC TM20-2021  AATCC TM20A-2021e",
+            "AATCC TM20-2021 AATCC TM20A-2021e (Korea)",
+        };
+
+        /// <summary>
+        /// **常规单组分**的改名表：下拉与报告都只印主标准，
+        /// 所以这条链上的值本身就短。多组分那份仍按合并写法，不套这张表。
+        /// 键逐字对应 <see cref="MethodOptionsCurrent"/>。
+        /// </summary>
+        private static readonly IReadOnlyDictionary<string, string> SingleRenamedCurrent =
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["AATCC TM20-2021 AATCC TM20A-2025 (Korea)"] = "AATCC TM20-2021 (Korea)",
+                ["CNS 2339-1:2013 CNS 2339-2:2013"] = "CNS 2339-1:2013",
+                ["JIS L 1030-1:2024 JIS L 1030-2-1:2024 JIS L 1030-2-2:2024 JIS L 1030-2-3:2024 JIS L 1030-2-4:2024 JIS L 1030-2-5:2024 JIS L 1030-2-6:2024"] = "JIS L 1030-1:2024",
+            };
+
+        /// <summary>单组分版的两份清单 —— 由上面两份**推导**，不另抄一遍；各自剔各自的。</summary>
         private static readonly IReadOnlyList<string> MethodOptionsCurrentSingle =
-            MethodOptionsCurrent.Where(m => !IsSingleComponentExcluded(m)).ToList();
+            MethodOptionsCurrent
+                .Where(m => !SingleExcludedCurrent.Contains(m))
+                .Select(m => SingleRenamedCurrent.TryGetValue(m, out var renamed) ? renamed : m)
+                .ToList();
 
         private static readonly IReadOnlyList<string> MethodOptionsDualSingle =
-            MethodOptionsDual.Where(m => !IsSingleComponentExcluded(m)).ToList();
+            MethodOptionsDual.Where(m => !SingleExcludedDual.Contains(m)).ToList();
 
         private readonly IFiberWorksheetRepository _worksheetRepo;
         private readonly IFiberDatabaseRepository _fiberDatabaseRepo;
@@ -176,7 +202,8 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         /// <para>
         /// <b>四份标准清单一次返回</b>：<c>methodOptions</c> / <c>methodOptions2C</c>（多组分）、
         /// <c>methodOptionsSingle</c> / <c>methodOptions2CSingle</c>（单组分，比多组分少
-        /// AATCC TM20A 复合两条、CNS、JIS，见 <see cref="IsSingleComponentExcluded"/>）。
+        /// 一条 AATCC 复合方法 / 两条 <c>TM20A-2021e</c>，见
+        /// <see cref="SingleExcludedCurrent"/> 与 <see cref="SingleExcludedDual"/>）。
         /// 于是切口径、切单/多组分都是**纯前端动作**，不用再请求一次，也不会因为网络慢让下拉短暂空掉。
         /// </para>
         ///

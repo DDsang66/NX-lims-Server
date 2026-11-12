@@ -45,7 +45,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Contract.Repository.FiberC
         Task<Dictionary<string, decimal>> GetMoistureRegainMapAsync(string standard);
 
         /// <summary>
-        /// 获取中文名映射（纤维英文名 → 中文名）。国标报告上的纤维名要印成 `中文English`。
+        /// 获取中文名映射（纤维英文名 → 中文名）。国标报告上的纤维名要印成 `English中文`。
         /// 与回潮率读的是同一张 fiber_database，只是换个列。
         /// </summary>
         Task<Dictionary<string, string>> GetChineseNameMapAsync();
