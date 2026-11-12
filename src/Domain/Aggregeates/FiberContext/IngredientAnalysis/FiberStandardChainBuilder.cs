@@ -409,14 +409,26 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// 单组分没有拆分列、也没有溶解组，天然走不到这一段。
         /// </para>
         /// </param>
+        /// <param name="pairingSlots">
+        /// **定量分部**（以及按成分数走的三元 / 四元分支）所依据的成分槽位。
+        /// <c>null</c> = 沿用 <paramref name="slots"/>（旧行为，测试与不关心来源的调用点用）。
+        ///
+        /// <para>
+        /// 生产侧传的是**只含溶解段**的槽位（见 <c>IngredientAnalysisCalculation.GetDissolvedFiberSlots</c>）——
+        /// **拆分成分不参与配对**。手工拆分没有化学定量分部可引，
+        /// 拆分列只贡献「通则」（<paramref name="needsGeneralPart"/>）；纯拆分记录因此
+        /// 不派生任何定量分部，混合记录只用溶解段的成分配对。
+        /// </para>
+        /// </param>
         internal static string BuildMethodString(
             string standard, List<string> fibers, IReadOnlyList<FiberSlot> slots,
             bool isSingleComponent = false, StandardMode mode = StandardMode.Current,
-            bool needsGeneralPart = false)
+            bool needsGeneralPart = false, IReadOnlyList<FiberSlot>? pairingSlots = null)
         {
             if (string.IsNullOrWhiteSpace(standard)) return string.Empty;
 
-            return BuildSingleStdChain(standard, fibers, slots, isSingleComponent, mode, needsGeneralPart);
+            return BuildSingleStdChain(
+                standard, fibers, slots, isSingleComponent, mode, needsGeneralPart, pairingSlots);
         }
 
         /// <summary>
@@ -429,7 +441,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         /// </summary>
         private static string BuildSingleStdChain(
             string standard, List<string> fibers, IReadOnlyList<FiberSlot> slots,
-            bool isSingleComponent, StandardMode mode, bool needsGeneralPart)
+            bool isSingleComponent, StandardMode mode, bool needsGeneralPart,
+            IReadOnlyList<FiberSlot>? pairingSlots = null)
         {
             if (string.IsNullOrWhiteSpace(standard)) return string.Empty;
 
@@ -476,15 +489,18 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             // 这两条判定因此逐字未动。
             var hasCellulosicParent = fibers.Any(f => f == "*cellulosic fibre" || f == "*Regenerated cellulose fibre");
 
+            // 定量分部（以及三元 / 四元分支）的成分来源。
+            // `null` = 沿用全部槽（旧行为）；生产侧只传溶解段（拆分成分不参与配对）。
+            var quantitative = pairingSlots ?? slots;
+
             // 三元法短路用的是**成分数**，父槽被其子纤维替换（1 换 N）、同名纤维只算一个，
-            // 不是顶层槽数。无子纤维**且无重名**时它恒等于 slots.Count == fibers.Count，
-            // 所以那 256 条输出逐字不变；重名的槽（同一根纤维录进两列）会因此少算一个，
-            // 跨过 3 那道坎时输出会变 —— 见 EffectiveComponentCount 的注释。
-            var count = EffectiveComponentCount(slots);
+            // 不是顶层槽数。这条计数与下面两处配对**同源**（都是定量成分）：
+            // 纯拆分记录定量成分为 0，天然跨不进"三元"那道坎。
+            var count = EffectiveComponentCount(quantitative);
 
             // 这 3 个成分是不是**分组父槽展开**得来的（计数口径见 EffectiveComponentCount）。
             // ISO 侧决定 count == 3 时只给 -2 还是分部同给，GB 侧决定成分对分部列不列 —— 同一判据。
-            var expanded = slots.Any(s => s.SubFibers.Count > 0);
+            var expanded = quantitative.Any(s => s.SubFibers.Count > 0);
 
             var parts = new List<string>();
 
@@ -516,8 +532,10 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                         parts.Add(general);
                 }
 
+                // 配对只用**定量成分**（生产侧 = 溶解段）。拆分列的成分不进这条循环 ——
+                // 手工分离没有对应的定量分部，它只贡献上面那条通则。
                 var subStandards = new List<string>();
-                foreach (var (first, second) in EnumeratePairs(slots))
+                foreach (var (first, second) in EnumeratePairs(quantitative))
                 {
                     if (ResolveIsoPart(first, second, hasAcrylic) is not int part) continue;
 
@@ -587,8 +605,9 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 // 三元及以上且无槽展开时不列 —— 与 ISO 侧的三元早退同口径（判据是槽展开，不是成分数）。
                 if (!(count >= 3 && !expanded))
                 {
+                    // 与 ISO 段同一条：配对只用定量成分（生产侧 = 溶解段），拆分列不参与。
                     var gbSubs = new HashSet<string>();
-                    foreach (var (first, second) in EnumeratePairs(slots))
+                    foreach (var (first, second) in EnumeratePairs(quantitative))
                     {
                         if (ResolveGbPart(first, second, hasAcrylic) is not int part) continue;
 

@@ -249,9 +249,11 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                     .Any(c => !string.IsNullOrWhiteSpace(c.FiberName))
                 || Components.OfType<DissolvedFiberComponent>()
                     .Count(c => c.DissolutionUnits.Any(u => !string.IsNullOrWhiteSpace(u.FiberName))) >= 2;
+            // 定量分部（配对 / 三元分支）只认**溶解段**：拆分列的成分不参与配对
+            // （见 GetDissolvedFiberSlots 与 BuildMethodString 的说明）。
             var methodString = FiberStandardChainBuilder.BuildMethodString(
                 standard, orderedFiberNames, GetOrderedFiberSlots(), Type == AnalysisType.Single, mode,
-                needsGeneralPart);
+                needsGeneralPart, GetDissolvedFiberSlots());
             result = result.WithMethods(methodString);
 
             // 3.6.1) 国标中文化 —— **按段**判定，读的是本份的标准（与上面那条同源）。
@@ -2183,6 +2185,39 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 throw new InvalidOperationException(
                     $"槽位通道与 GetOrderedFiberNames() 长度不一致（{slots.Count} vs {names.Count}）：" +
                     "两处遍历必须同步维护，见 GetOrderedFiberSlots 的注释。");
+            }
+
+            return slots;
+        }
+
+        /// <summary>
+        /// **只溶解段**的槽位 —— 方法链里「定量分部」（配对 / 三元分支）的唯一成分来源。
+        ///
+        /// <para>
+        /// **拆分成分不参与配对**。手工拆分没有对应的化学定量分部，
+        /// 只写在 1833-1 的 Annex B（通则，由 <c>needsGeneralPart</c> 负责）。
+        /// 于是纯拆分记录定量成分为 0 → 不派生任何定量分部；混合记录只用溶解段的成分配对。
+        /// </para>
+        ///
+        /// <para>
+        /// 遍历与排序键和 <see cref="GetOrderedFiberSlots"/> 的溶解段**逐字一致**
+        /// （按 <see cref="MultiDissolvedUnit.DissolutionStep"/>），不做空白过滤 ——
+        /// 纯溶解记录的这次传参与旧行为完全重合，输出零漂移。
+        /// 单组分没有溶解列，返回空表（单组分本就不派生定量分部）。
+        /// </para>
+        /// </summary>
+        private List<FiberSlot> GetDissolvedFiberSlots()
+        {
+            var slots = new List<FiberSlot>();
+
+            if (Type == AnalysisType.Single) return slots;
+
+            foreach (var d in Components.OfType<DissolvedFiberComponent>())
+            {
+                foreach (var unit in d.DissolutionUnits.OrderBy(u => u.DissolutionStep))
+                {
+                    slots.Add(BuildSlot(unit.FiberName, unit.CellulosicSubFibers));
+                }
             }
 
             return slots;

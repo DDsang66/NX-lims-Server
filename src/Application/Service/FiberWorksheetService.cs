@@ -21,7 +21,13 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
     public class FiberWorksheetService : IScopedDependency
     {
         /// <summary>
-        /// Method 下拉的候选标准 —— **常规口径**（各标准的当前版本）。原先是 FiberWorkSheet.vue 里的硬编码。
+        /// Method 候选标准的**全集** —— **常规口径**（各标准的当前版本）。原先是 FiberWorkSheet.vue 里的硬编码。
+        ///
+        /// <para>
+        /// 不是直接下发的清单：**多组分**两份要再剔掉 <see cref="MultiExcluded"/>，**单组分**两份按
+        /// <see cref="SingleExcludedCurrent"/> / <see cref="SingleRenamedCurrent"/> 推导。
+        /// 两者各以本表为源，免得同一份清单抄两遍、改一处漏一处。
+        /// </para>
         ///
         /// **刻意留在 Application 层、不进 <see cref="FiberOptions"/>**：那几张表是"纤维属于哪个分组"的
         /// 领域知识，这一串是"界面选哪些标准"的录入项 —— 混进 Domain 等于把展示口径写进领域规则。
@@ -43,7 +49,7 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         /// 逐字透传、不派生。
         /// </para>
         /// </summary>
-        private static readonly IReadOnlyList<string> MethodOptionsCurrent = new[]
+        private static readonly IReadOnlyList<string> MethodOptionsCurrentAll = new[]
         {
             "Regulation (Eu) No. 1007/2011",
             "AATCC TM20-2021",
@@ -61,9 +67,9 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         };
 
         /// <summary>
-        /// Method 下拉的候选标准 —— **2C 口径**（CNAS + CMA 双资质）。
+        /// Method 候选标准的**全集** —— **2C 口径**（CNAS + CMA 双资质）。
         ///
-        /// **顺序与 <see cref="MethodOptionsCurrent"/> 逐条对齐**，只有两类差别：
+        /// **顺序与 <see cref="MethodOptionsCurrentAll"/> 逐条对齐**，只有两类差别：
         ///
         /// <list type="number">
         /// <item><b>换值（体系名不变、版本变）</b> —— 两条 AATCC 的 TM20A 年份 `2025` → `2021e`
@@ -77,7 +83,7 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         /// ⚠️ 前端切模式时**必须先按值重映射、再滤掉不在新清单里的** —— 那两条换值的串
         /// 只做 filter 会把常规串原样提交给 2C 记录，派生出来的链就错口径了。
         /// </summary>
-        private static readonly IReadOnlyList<string> MethodOptionsDual = new[]
+        private static readonly IReadOnlyList<string> MethodOptionsDualAll = new[]
         {
             "Regulation (Eu) No. 1007/2011",
             "AATCC TM20-2021",
@@ -92,7 +98,26 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         };
 
         /// <summary>
+        /// **多组分**两份下拉都不供的条目：裸写的 <c>AATCC TM20-2021</c>。
+        /// 2026-11-12 用户裁定 —— 多组分只认 TM20 + TM20A 那一套复合方法名。
         ///
+        /// **只影响下拉摆什么**，不影响生成：库里既有的这个值照旧能算、能出报告
+        /// （AATCC 逐字透传）。**单组分两份照旧供它**（单组分本就只印主标准）。
+        /// </summary>
+        private static readonly IReadOnlySet<string> MultiExcluded = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "AATCC TM20-2021",
+        };
+
+        /// <summary>多组分两份 = 全集剔掉 <see cref="MultiExcluded"/>，顺序不变。</summary>
+        private static readonly IReadOnlyList<string> MethodOptionsCurrent =
+            MethodOptionsCurrentAll.Where(m => !MultiExcluded.Contains(m)).ToList();
+
+        private static readonly IReadOnlyList<string> MethodOptionsDual =
+            MethodOptionsDualAll.Where(m => !MultiExcluded.Contains(m)).ToList();
+
+        /// <summary>
+        /// **单组分常规**不供的条目。
         /// 用**精确串**而不是前缀/子串：裁定点名的就是这几条，通配会顺手带走整族。
         /// </summary>
         private static readonly IReadOnlySet<string> SingleExcludedCurrent = new HashSet<string>(StringComparer.Ordinal)
@@ -117,7 +142,7 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         /// <summary>
         /// **常规单组分**的改名表：下拉与报告都只印主标准，
         /// 所以这条链上的值本身就短。多组分那份仍按合并写法，不套这张表。
-        /// 键逐字对应 <see cref="MethodOptionsCurrent"/>。
+        /// 键逐字对应 <see cref="MethodOptionsCurrentAll"/>。
         /// </summary>
         private static readonly IReadOnlyDictionary<string, string> SingleRenamedCurrent =
             new Dictionary<string, string>(StringComparer.Ordinal)
@@ -127,15 +152,18 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
                 ["JIS L 1030-1:2024 JIS L 1030-2-1:2024 JIS L 1030-2-2:2024 JIS L 1030-2-3:2024 JIS L 1030-2-4:2024 JIS L 1030-2-5:2024 JIS L 1030-2-6:2024"] = "JIS L 1030-1:2024",
             };
 
-        /// <summary>单组分版的两份清单 —— 由上面两份**推导**，不另抄一遍；各自剔各自的。</summary>
+        /// <summary>
+        /// 单组分版的两份清单 —— 由两份**全集**推导（不是多组分那两份：多组分还剔了
+        /// <see cref="MultiExcluded"/>，裸写的 <c>AATCC TM20-2021</c> 单组分照旧要供）。
+        /// </summary>
         private static readonly IReadOnlyList<string> MethodOptionsCurrentSingle =
-            MethodOptionsCurrent
+            MethodOptionsCurrentAll
                 .Where(m => !SingleExcludedCurrent.Contains(m))
                 .Select(m => SingleRenamedCurrent.TryGetValue(m, out var renamed) ? renamed : m)
                 .ToList();
 
         private static readonly IReadOnlyList<string> MethodOptionsDualSingle =
-            MethodOptionsDual.Where(m => !SingleExcludedDual.Contains(m)).ToList();
+            MethodOptionsDualAll.Where(m => !SingleExcludedDual.Contains(m)).ToList();
 
         private readonly IFiberWorksheetRepository _worksheetRepo;
         private readonly IFiberDatabaseRepository _fiberDatabaseRepo;
@@ -200,9 +228,10 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         /// 标准清单是本类的私有常量 —— 理由见 <see cref="MethodOptionsCurrent"/>。
         ///
         /// <para>
-        /// <b>四份标准清单一次返回</b>：<c>methodOptions</c> / <c>methodOptions2C</c>（多组分）、
-        /// <c>methodOptionsSingle</c> / <c>methodOptions2CSingle</c>（单组分，比多组分少
-        /// 一条 AATCC 复合方法 / 两条 <c>TM20A-2021e</c>，见
+        /// <b>四份标准清单一次返回</b>：<c>methodOptions</c> / <c>methodOptions2C</c>（多组分，
+        /// 比全集少一条裸写的 <c>AATCC TM20-2021</c>，见 <see cref="MultiExcluded"/>）、
+        /// <c>methodOptionsSingle</c> / <c>methodOptions2CSingle</c>（单组分，**照旧供**裸写的
+        /// <c>AATCC TM20-2021</c>，只少一条 AATCC 复合方法 / 两条 <c>TM20A-2021e</c>，见
         /// <see cref="SingleExcludedCurrent"/> 与 <see cref="SingleExcludedDual"/>）。
         /// 于是切口径、切单/多组分都是**纯前端动作**，不用再请求一次，也不会因为网络慢让下拉短暂空掉。
         /// </para>
@@ -527,7 +556,7 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         /// <para>
         /// 组头行不是一条成分 —— 它是这一组所有成分的缩写拼接（Spandex/Polyester → `E/T`），
         /// 克重是整组总重、占比是 100% 起始行。它与下面几行长得一模一样，印成黑的会被当成
-        /// 一条真实纤维读，所以整行淡化以示区分（用户 2026-11-10 要求）。
+        /// 一条真实纤维读，所以整行淡化以示区分。
         /// </para>
         /// <para>
         /// 判据与领域层、适配器结果表/页脚那几处**同一个**：<see cref="MultiFiberRowUnit.Sum"/>
@@ -615,7 +644,7 @@ namespace NX_lims_Softlines_Command_System.src.Application.Service
         /// 收集要插显微镜图的纤维名 —— 多组分展开所有溶解单元，**纤维素父行的展示子行一并算进来**。
         ///
         /// <para>
-        /// 用户 2026-11-03：「子行纤维的图片也要，不要重复」。纤维素子纤维（父槽名 + 占比 &gt; 0）
+        /// 「子行纤维的图片也要，不要重复」。纤维素子纤维（父槽名 + 占比 &gt; 0）
         /// 在图库里有图就印；没图的仍由
         /// <see cref="IWordTemplateEngine.InsertMicroscopeImages"/> 整条跳过、不占槽位。
         /// </para>
