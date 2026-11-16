@@ -597,7 +597,10 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
 
                 // T129: 无 elastane → GB/T 2910.1（通则）。
                 // >3 组分且无槽展开时改引 FZ/T 01026 那条线，2910 系列（通则也算）一条都不引。
-                var hasElastane = fibers.Any(FiberTokens.IsElastane);
+                //
+                // elastane 判的是**定量成分**（溶解段），不是整条名单：拆分列的 elastane不派生 2910.20，也就不该顶掉通则。
+                // 与上面 hasAcrylic / hasCellulosicParent 读全量名单**刻意不同源**，别顺手统一。
+                var hasElastane = quantitative.SelectMany(s => s.PairingNames).Any(FiberTokens.IsElastane);
                 if (!hasElastane && !(count > 3 && !expanded))
                     parts.Add(GB2910_1);
 
