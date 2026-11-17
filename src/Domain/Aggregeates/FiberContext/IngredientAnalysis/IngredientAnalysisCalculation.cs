@@ -1024,13 +1024,16 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
 
         /// <summary>
         /// 金属镀膜纤维显示名：`AsEntered` 照录入原样，
-        /// `MetallisedFibre` 印英式单数（ISO / AATCC 用），`MetallizedFibres` 印美式复数（国标用）。
+        /// `MetallisedFibre` 印英式单数（ISO 用），
+        /// `MetallisedFibreOrMetallic` 其余写法归成英式单数、录入 <c>Metallic</c> 的保留原词（AATCC 用），
+        /// `MetallizedFibres` 印美式复数（国标用）。
         /// 只影响印出来的名字，不进任何取值/排序/聚合的键。
         /// </summary>
         private enum MetallizedNaming
         {
             AsEntered,
             MetallisedFibre,
+            MetallisedFibreOrMetallic,
             MetallizedFibres,
         }
 
@@ -1142,7 +1145,7 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
 
                 if (isAatcc)
                     return new ReportFiberNaming(LinenFlaxNaming.Linen, ElastaneNaming.AsEntered, MetalNaming.Metal,
-                        MetallizedNaming.MetallisedFibre,
+                        MetallizedNaming.MetallisedFibreOrMetallic,
                         ElastodieneNaming.Rubber, PolyamideNaming.AsEntered, ViscoseNaming.AsEntered,
                         RegeneratedNaming.AsEntered);
 
@@ -1185,9 +1188,15 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 // 金属镀膜纤维与上面那支互斥（IsMetalFibre 不认 Metallised/Metallic），先后无影响。
                 if (Metallized != MetallizedNaming.AsEntered && FiberTokens.IsMetallizedFibre(name))
                 {
-                    return Metallized == MetallizedNaming.MetallisedFibre
-                        ? "Metallised fibre"
-                        : "Metallized fibres";
+                    if (Metallized == MetallizedNaming.MetallizedFibres)
+                        return "Metallized fibres";
+
+                    // 美标：录入俗称 `Metallic` 的保留原词，其余写法照样归成英式单数。
+                    if (Metallized == MetallizedNaming.MetallisedFibreOrMetallic
+                        && FiberTokens.IsMetallicShorthand(name))
+                        return "Metallic";
+
+                    return "Metallised fibre";
                 }
 
                 if (Polyamide != PolyamideNaming.AsEntered && FiberTokens.IsPolyamideOrNylon(name))
