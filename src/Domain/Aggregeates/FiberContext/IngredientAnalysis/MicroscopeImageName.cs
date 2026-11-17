@@ -38,6 +38,9 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 ["Bicomponent Fiber"] = "涤锦复合丝",
                 ["Biconstituent Fiber"] = "涤锦复合丝",
                 ["Olefin"] = "Polypropylene",
+                // 同一纤维的另外两种写法都指过去（**不是**金属纤维 `Metal fibre`）。
+                ["Metallised fibre"] = "Metallic",
+                ["Metallized fibres"] = "Metallic",
             };
 
         /// <summary>
