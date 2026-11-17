@@ -178,8 +178,9 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
             || Clean(f).Equals("metal fiber", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
-        /// 金属镀膜纤维 —— 统一拼法：ISO / AATCC 印 <c>Metallised fibre</c>（英式单数），
-        /// 国标印 <c>Metallized fibres</c>（美式复数）；其余标准照录入。
+        /// 金属镀膜纤维 —— ISO 印 <c>Metallised fibre</c>（英式单数），国标印 <c>Metallized fibres</c>（美式复数）；
+        /// AATCC 印 <c>Metallised fibre</c>，但录入简称 <c>Metallic</c> 的保留 <c>Metallic</c>（见 <see cref="IsMetallicShorthand"/>）；
+        /// 其余标准照录入。
         ///
         /// 命中 fiber_database 里中文名为「金属镀膜纤维」的那三行，精确等值、忽略大小写与首尾空白：
         /// <c>Metallized fibres</c>（美式复数）、<c>Metallised fibre</c>（英式单数）、<c>Metallic</c>（简称）。
@@ -189,7 +190,14 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
         internal static bool IsMetallizedFibre(string f)
             => Clean(f).Equals("metallized fibres", StringComparison.OrdinalIgnoreCase)
             || Clean(f).Equals("metallised fibre", StringComparison.OrdinalIgnoreCase)
-            || Clean(f).Equals("metallic", StringComparison.OrdinalIgnoreCase);
+            || IsMetallicShorthand(f);
+
+        /// <summary>
+        /// 金属镀膜纤维三行里的简称 <c>Metallic</c> —— 美标下它**保留原词**、不并进 <c>Metallised fibre</c>。精确等值、忽略大小写与首尾空白。
+        /// 只服务显示名，不参与取值/排序/去重。
+        /// </summary>
+        internal static bool IsMetallicShorthand(string f)
+            => Clean(f).Equals("metallic", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// 橡筋 —— `Elastodiene` 与 `Rubber` 是 fiber_database 里**同一纤维的两行**
