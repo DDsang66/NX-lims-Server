@@ -535,24 +535,43 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 // 配对只用**定量成分**（生产侧 = 溶解段）。拆分列的成分不进这条循环 ——
                 // 手工分离没有对应的定量分部，它只贡献上面那条通则。
                 var subStandards = new List<string>();
+
+                // 2C 下 `-22` 落空（资质列写 `/`）时用**通则**补位：方法本可以出 -22，
+                // 只是这个口径没有该分部，链里不能空着 —— 见循环后的补位。
+                var missingMinus22 = false;
+
                 foreach (var (first, second) in EnumeratePairs(quantitative))
                 {
                     if (ResolveIsoPart(first, second, hasAcrylic) is not int part) continue;
 
                     // **-22 只服务二元混合物**：1833-22:2020 的范围原话是 "binary mixtures of
                     // viscose or certain types of cupro or modal or lyocell with flax fibres"，
-                    // 三个及以上组分是多段分析，不引这一分部（用户 2026-11-10 裁定）。
+                    // 三个及以上组分是多段分析，不引这一分部。
                     //
                     // 只在这里拦，**不动 ResolveIsoPart**：查表是"这一对纤维适合哪个分部"的
                     // 成对口径（pair-coverage golden 钉着它），组分数的判断属于"链要不要引"。
                     if (part == 22 && count >= 3) continue;
 
                     // 2C 下这个分部落空（资质列写 `/`）→ 直接跳过，不让它占位。
+                    // -22 要记一笔：这个组合本该有定量分部，落空后由通则补位（见循环后）。
                     var s = RenderIsoSub(fam, mode, part);
-                    if (s.Length == 0) continue;
+                    if (s.Length == 0)
+                    {
+                        if (part == 22) missingMinus22 = true;
+                        continue;
+                    }
 
                     if (!subStandards.Contains(s))
                         subStandards.Add(s);
+                }
+
+                // 通则补位：位置与上面 needsGeneralPart 那支一致（鉴别法之后、定量分部之前），
+                // 已经补过就不再加。count >= 3 时 -22 在循环里已被拦掉，这里恒不触发。
+                if (missingMinus22)
+                {
+                    var general = RenderIsoSub(fam, mode, 1);
+                    if (general.Length > 0 && !parts.Contains(general))
+                        parts.Add(general);
                 }
 
                 // 三元法短路。**两种情形必须分开**：
