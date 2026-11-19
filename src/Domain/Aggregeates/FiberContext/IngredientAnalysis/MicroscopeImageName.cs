@@ -13,8 +13,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
     /// **连图注都不印**，后面的纤维还会往前串一格。
     ///
     /// ⚠️ **这是一张显式白名单，不是"同义就收"**。<c>Rayon</c>（= Viscose）在
-    /// <see cref="FiberTokens"/> 的口径里同样是同义行，
-    /// 但是目前**不收**，所以它**刻意不在这里**。
+    /// <see cref="FiberTokens"/> 的口径里同样是同义行，2026-09 时**刻意不收**；
+    /// **2026-11-19 用户点名收录**（真实期 16 条记录因此开始出图），见下面的表项。
     /// 别按"同义就加"扩表 —— 要加先问。
     ///
     /// ⚠️ **右侧不一定是另一行纤维**：<c>Rabbit</c> 既不在 `fiber_database`、也不在任何记录里，
@@ -38,6 +38,8 @@ namespace NX_lims_Softlines_Command_System.src.Domain.Aggregeates.FiberContext.I
                 ["Bicomponent Fiber"] = "涤锦复合丝",
                 ["Biconstituent Fiber"] = "涤锦复合丝",
                 ["Olefin"] = "Polypropylene",
+                // 2026-11-19 用户点名收录：Rayon 与 Viscose 是同一纤维的两行、共用这张图。
+                ["Rayon"] = "Viscose",
                 // 同一纤维的另外两种写法都指过去（**不是**金属纤维 `Metal fibre`）。
                 ["Metallised fibre"] = "Metallic",
                 ["Metallized fibres"] = "Metallic",
